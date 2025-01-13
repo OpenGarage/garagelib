@@ -142,6 +142,7 @@ namespace SecPlus2 {
     };
 
     #define COMMAND_DELAY 100
+    #define SYNC_DELAY 1000
 
     class Garage {
         uint32_t client_id;
@@ -164,6 +165,8 @@ namespace SecPlus2 {
         SecPlusReader reader;
         CommandBuffer buf;
         uint64_t next_command_time;
+        uint64_t next_sync_time;
+        uint64_t next_sync_time;
 
         public:
             Garage(uint32_t client_id, SoftwareSerial *serial, int rx_pin, int tx_pin, bool check_collision = true) {
@@ -233,9 +236,10 @@ namespace SecPlus2 {
             }
 
             void loop() {
-                if (door_state == DoorStatus::UNKNOWN) {
+                if (door_state == DoorStatus::UNKNOWN && next_sync_time) {
                     request_status();
                     request_openings();
+                    next_command_time = millis() + SYNC_DELAY;
                 }
 
                 if (buf.get_size() && millis() > next_command_time) {

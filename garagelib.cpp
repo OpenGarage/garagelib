@@ -166,7 +166,6 @@ namespace SecPlus2 {
         CommandBuffer buf;
         uint64_t next_command_time;
         uint64_t next_sync_time;
-        uint64_t next_sync_time;
 
         public:
             Garage(uint32_t client_id, SoftwareSerial *serial, int rx_pin, int tx_pin, bool check_collision = true) {

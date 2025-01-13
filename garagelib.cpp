@@ -3,6 +3,15 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 
+#ifdef GARAGELIB_DEBUG
+#define GARAGELIB_PRINT_TAG Serial.print("[GARAGELIB] ")
+#define GARAGELIB_PRINT(x) GARAGELIB_PRINT_TAG; Serial.print(x)
+#define GARAGELIB_PRINTLN(x) GARAGELIB_PRINT_TAG; Serial.println(x)
+#else
+#define GARAGELIB_PRINT(x)
+#define GARAGELIB_PRINTLN(x)
+#endif
+
 namespace SecPlus2 {
     enum class Command : uint16_t {
         UNKNOWN = 0x000,
@@ -235,7 +244,7 @@ namespace SecPlus2 {
                         buf.pop();
                         next_command_time = millis() + COMMAND_DELAY;
                     } else {
-                        Serial.println("Command failed to send");
+                        GARAGELIB_PRINTLN("Command failed to send");
                     }
                 }
 
@@ -288,11 +297,13 @@ namespace SecPlus2 {
                 if (check_collision && digitalRead(rx_pin)) return -1;
 
 
+                #ifdef GARAGELIB_DEBUG
                 uint32_t r = 0;
                 uint64_t i = 0;
                 uint16_t c = 0;
                 uint32_t p = 0;
                 decode_wireline_command(packet, &r, &i, &c, &p);
+                GARAGELIB_PRINT_TAG;
                 Serial.print("[OUTGOING PACKET] Rolling code: ");
                 Serial.print(r);
                 Serial.print(" id: ");
@@ -303,11 +314,14 @@ namespace SecPlus2 {
                 Serial.print(p, HEX);
                 Serial.println(".");
 
+                GARAGELIB_PRINT_TAG;
                 Serial.print("Sending packet: [");
                 for (int i = 0; i < SEC2_PACKET_SIZE; i++) {
                     Serial.print(packet[i], HEX);
                 }
                 Serial.println("]");
+                #endif
+
                 serial->write(packet, SEC2_PACKET_SIZE);
                 delayMicroseconds(100);
 
@@ -330,11 +344,13 @@ namespace SecPlus2 {
                 int8_t err;
                 if (decode_wireline(packet, &rolling, &fixed, &data) < 0) return err;
 
+                #ifdef GARAGELIB_DEBUG
                 uint32_t r = 0;
                 uint64_t i = 0;
                 uint16_t c = 0;
                 uint32_t p = 0;
                 decode_wireline_command(packet, &r, &i, &c, &p);
+                GARAGELIB_PRINT_TAG;
                 Serial.print("[INCOMING PACKET] Rolling code: ");
                 Serial.print(r);
                 Serial.print(" id: ");
@@ -344,6 +360,7 @@ namespace SecPlus2 {
                 Serial.print(" payload: ");
                 Serial.print(p, HEX);
                 Serial.println(".");
+                #endif
 
                 Command command = static_cast<Command>(((fixed >> 24) & 0xf00) | (data & 0xff));
 

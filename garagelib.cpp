@@ -235,7 +235,7 @@ namespace SecPlus2 {
             }
 
             void loop() {
-                if (door_state == DoorStatus::UNKNOWN && next_sync_time) {
+                if (door_state == DoorStatus::UNKNOWN && millis() > next_command_time) {
                     request_status();
                     request_openings();
                     next_command_time = millis() + SYNC_DELAY;

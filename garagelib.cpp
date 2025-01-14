@@ -144,29 +144,21 @@ namespace SecPlus2 {
     #define COMMAND_DELAY 100
     #define SYNC_DELAY 1000
 
+    typedef struct {
+        DoorStatus door_state;
+        bool light_state;
+        bool lock_state;
+        bool obstruction_state;
+        bool motor_state;
+        bool button_state;
+        bool battery_state;
+        bool learn_state;
+        uint16_t openings;
+    } state_struct_t;
+
+    typedef void (*state_callback_t)(state_struct_t state);
+
     class Garage {
-        uint32_t client_id;
-        uint32_t rolling_code = 0;
-        uint8_t protocol_version;
-        bool check_collision;
-
-        DoorStatus door_state = DoorStatus::UNKNOWN;
-        bool light_state = false;
-        bool lock_state = false;
-        bool obstruction_state = false;
-        bool motor_state = false;
-        bool button_state = false;
-        bool battery_state = false;
-        bool learn_state = false;
-        uint16_t openings = 0;
-        SoftwareSerial serial;
-        int rx_pin;
-        int tx_pin;
-        SecPlusReader reader;
-        CommandBuffer buf;
-        uint64_t next_command_time;
-        uint64_t next_sync_time;
-
         public:
             Garage(uint32_t client_id, int rx_pin, int tx_pin, bool check_collision = true) {
                 this->client_id = client_id;
@@ -179,6 +171,10 @@ namespace SecPlus2 {
                 // Start Serial with 8 bits no parity 1 stop bit and inverted
                 this->serial.begin(9600, SWSERIAL_8N1, rx_pin, tx_pin, true);
                 this->serial.enableIntTx(false);
+            }
+
+            void enable_callback(state_callback_t callback) {
+                this->state_callback = callback;
             }
 
             int8_t request_status() {
@@ -238,7 +234,7 @@ namespace SecPlus2 {
             }
 
             void loop() {
-                if (door_state == DoorStatus::UNKNOWN && millis() > next_sync_time) {
+                if (state.door_state == DoorStatus::UNKNOWN && millis() > next_sync_time) {
                     request_status();
                     request_openings();
                     next_sync_time = millis() + SYNC_DELAY;
@@ -263,26 +259,58 @@ namespace SecPlus2 {
             }
 
             bool get_light_state() {
-                return light_state;
+                return state.light_state;
             }
 
             bool get_lock_state() {
-                return lock_state;
+                return state.lock_state;
             }
 
             DoorStatus get_door_state() {
-                return door_state;
+                return state.door_state;
             }
 
             bool get_obstruction_state() {
-                return obstruction_state;
+                return state.obstruction_state;
             }
 
             uint16_t get_opening_count() {
-                return openings;
+                return state.openings;
             }
 
         private:
+            uint32_t client_id;
+            uint32_t rolling_code = 0;
+            uint8_t protocol_version;
+            bool check_collision;
+
+            state_struct_t state {
+                door_state: DoorStatus::UNKNOWN,
+                light_state: false,
+                lock_state: false,
+                obstruction_state: false,
+                motor_state: false,
+                button_state: false,
+                battery_state: false,
+                learn_state: false,
+                openings: 0,
+            };
+            
+            SoftwareSerial serial;
+            int rx_pin;
+            int tx_pin;
+            SecPlusReader reader;
+            CommandBuffer buf;
+            uint64_t next_command_time;
+            uint64_t next_sync_time;
+
+            state_callback_t state_callback;
+
+            
+            void update_callback() {
+                if (state_callback) state_callback(state);
+            }
+
             int8_t queue_command(Command command, uint8_t data_low, uint16_t data_high) {
                 uint8_t *packet = buf.push_next();
                 if (packet) {
@@ -372,42 +400,45 @@ namespace SecPlus2 {
 
                 switch (command) {
                     case Command::STATUS:
-                        door_state = static_cast<DoorStatus>((data >> 8) & 0xF);
-                        obstruction_state = (data >> 22) & 0x1;
-                        lock_state = (data >> 24) & 0x1;
-                        light_state = (data >> 25) & 0x1;
+                        state.door_state = static_cast<DoorStatus>((data >> 8) & 0xF);
+                        state.obstruction_state = (data >> 22) & 0x1;
+                        state.lock_state = (data >> 24) & 0x1;
+                        state.light_state = (data >> 25) & 0x1;
                         break;
                     case Command::LOCK:
                         switch ((data >> 8) & 0x11) {
                             case 0b00:
-                                lock_state = false;
+                                state.lock_state = false;
                             case 0b01:
-                                lock_state = true;
+                                state.lock_state = true;
                             case 0b10:
-                                lock_state = !lock_state;
+                                state.lock_state = !state.lock_state;
                                 break;
                             case 0b11:
                                 // Unknown
                                 break;
                         }
+                        update_callback();
                         break;
                     case Command::LIGHT:
                         switch ((data >> 8) & 0x11) {
                             case 0b00:
-                                light_state = false;
+                                state.light_state = false;
                             case 0b01:
-                                light_state = true;
+                                state.light_state = true;
                             case 0b10:
-                                light_state = !light_state;
+                                state.light_state = !state.light_state;
                                 break;
                             case 0b11:
                                 // Unknown
                                 break;
                         }
+                        update_callback();
                         break;
                     case Command::OPENINGS:
                         // Openings is stored in the higher 2 bytes as a little endian unsigned short
-                        openings = ((data >> 8) & 0xFF00) | ((data >> 24) & 0xFF);
+                        state.openings = ((data >> 8) & 0xFF00) | ((data >> 24) & 0xFF);
+                        update_callback();
                         break;
                     default:
                         // Unknown command

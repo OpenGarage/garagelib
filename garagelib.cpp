@@ -244,10 +244,11 @@ namespace SecPlus2 {
                     if (!send_data(buf.get_head())) {
                         // No error then pop the head off as the command was successfully sent.
                         buf.pop();
-                        next_command_time = millis() + COMMAND_DELAY;
                     } else {
                         GARAGELIB_PRINTLN("Command failed to send");
                     }
+
+                    next_command_time = millis() + COMMAND_DELAY;
                 }
 
                 if (serial.available()) {

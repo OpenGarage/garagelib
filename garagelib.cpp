@@ -159,7 +159,7 @@ namespace SecPlus2 {
         bool battery_state = false;
         bool learn_state = false;
         uint16_t openings = 0;
-        SoftwareSerial *serial;
+        SoftwareSerial serial;
         int rx_pin;
         int tx_pin;
         SecPlusReader reader;
@@ -168,14 +168,17 @@ namespace SecPlus2 {
         uint64_t next_sync_time;
 
         public:
-            Garage(uint32_t client_id, SoftwareSerial *serial, int rx_pin, int tx_pin, bool check_collision = true) {
+            Garage(uint32_t client_id, int rx_pin, int tx_pin, bool check_collision = true) {
                 this->client_id = client_id;
                 this->protocol_version = 2;
                 this->check_collision = check_collision;
-                this->serial = serial;
                 this->rx_pin = rx_pin;
                 this->tx_pin = tx_pin;
                 this->reader = SecPlusReader();
+
+                // Start Serial with 8 bits no parity 1 stop bit and inverted
+                this->serial.begin(9600, SWSERIAL_8N1, rx_pin, tx_pin, true);
+                this->serial.enableIntTx(false);
             }
 
             int8_t request_status() {
@@ -251,8 +254,8 @@ namespace SecPlus2 {
                     }
                 }
 
-                if (serial->available()) {
-                    if (reader.read_byte(serial->read())) {
+                if (serial.available()) {
+                    if (reader.read_byte(serial.read())) {
                         // If the packet is complete
                         process_packet(reader.get_packet());
                     }
@@ -325,7 +328,7 @@ namespace SecPlus2 {
                 Serial.println("]");
                 #endif
 
-                serial->write(packet, SEC2_PACKET_SIZE);
+                serial.write(packet, SEC2_PACKET_SIZE);
                 delayMicroseconds(100);
 
                 return 0;

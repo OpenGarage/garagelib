@@ -405,6 +405,7 @@ namespace SecPlus2 {
                         state.obstruction_state = (data >> 22) & 0x1;
                         state.lock_state = (data >> 24) & 0x1;
                         state.light_state = (data >> 25) & 0x1;
+                        update_callback();
                         break;
                     case Command::LOCK:
                         switch ((data >> 8) & 0x11) {

@@ -208,12 +208,17 @@ namespace SecPlus2 {
             int8_t set_door(DoorAction door_action) {
                 // Door action is in the 1st and 2nd bits of data
                 // Pressed bit is the 5th bit (1st bit of the high part) which needs to be high to work
-                uint16 data_high = 1;
+                // (though other implementations send a high then a low)
+                uint16 data_high = 0;
 
                 // For now door id is 1
                 uint16 door_id = 1;
                 // Door id is the 12th and 13th bits (8th and 9st bits of the high part)
                 data_high |= door_id << 8;
+
+                // First send a pressed then a releaase
+                int8_t err = queue_command(Command::DOOR_ACTION, static_cast<uint8_t>(door_action), data_high+1);
+                if (err < 0) return err;
                 return queue_command(Command::DOOR_ACTION, static_cast<uint8_t>(door_action), data_high);
             }
 

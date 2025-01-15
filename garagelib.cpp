@@ -12,9 +12,9 @@
 #define GARAGELIB_PRINTLN(x)
 #endif
 
-namespace Common {
+namespace SecPlusCommon {
     const size_t metadata_size = 2;
-    #define NEW_COMMAND_BUFFER(NAME, PACKET, CAP) uint8_t NAME[(PACKET+Common::metadata_size)*CAP]
+    #define NEW_COMMAND_BUFFER(NAME, PACKET, CAP) uint8_t NAME[(PACKET+SecPlusCommon::metadata_size)*CAP]
 
     enum class DoorStatus : uint8_t {
         UNKNOWN = 0,
@@ -161,7 +161,7 @@ namespace SecPlus2 {
     const size_t SYNC_DELAY = 1000;
 
     typedef struct {
-        Common::DoorStatus door_state;
+        SecPlusCommon::DoorStatus door_state;
         bool light_state;
         bool lock_state;
         bool obstruction_state;
@@ -255,7 +255,7 @@ namespace SecPlus2 {
 
             void loop() {
                 if (!serial.available()) {
-                    if (state.door_state == Common::DoorStatus::UNKNOWN && millis() > next_sync_time) {
+                    if (state.door_state == SecPlusCommon::DoorStatus::UNKNOWN && millis() > next_sync_time) {
                         request_status();
                         request_openings();
                         next_sync_time = millis() + SYNC_DELAY;
@@ -288,7 +288,7 @@ namespace SecPlus2 {
                 return state.lock_state;
             }
 
-            Common::DoorStatus get_door_state() {
+            SecPlusCommon::DoorStatus get_door_state() {
                 return state.door_state;
             }
 
@@ -307,7 +307,7 @@ namespace SecPlus2 {
             bool check_collision;
 
             state_struct_t state {
-                door_state: Common::DoorStatus::UNKNOWN,
+                door_state: SecPlusCommon::DoorStatus::UNKNOWN,
                 light_state: false,
                 lock_state: false,
                 obstruction_state: false,
@@ -323,7 +323,7 @@ namespace SecPlus2 {
             int tx_pin;
             SecPlusReader reader;
             NEW_COMMAND_BUFFER(internal_buffer, SEC2_PACKET_SIZE, COMMAND_BUFFER_CAPACITY);
-            Common::CommandBuffer buf = Common::CommandBuffer(SEC2_PACKET_SIZE, COMMAND_BUFFER_CAPACITY, internal_buffer);
+            SecPlusCommon::CommandBuffer buf = SecPlusCommon::CommandBuffer(SEC2_PACKET_SIZE, COMMAND_BUFFER_CAPACITY, internal_buffer);
             uint64_t next_command_time;
             uint64_t next_sync_time;
 
@@ -339,7 +339,7 @@ namespace SecPlus2 {
                 if (packet) {
                     *packet = delay >> 8;
                     *(packet + 1) = delay & 0xFF;
-                    return encode_data(static_cast<uint16_t>(command), data_low, data_high, packet + Common::metadata_size);
+                    return encode_data(static_cast<uint16_t>(command), data_low, data_high, packet + SecPlusCommon::metadata_size);
                 } else {
                     return -1;
                 }
@@ -425,7 +425,7 @@ namespace SecPlus2 {
 
                 switch (command) {
                     case Command::STATUS:
-                        state.door_state = static_cast<Common::DoorStatus>((data >> 8) & 0xF);
+                        state.door_state = static_cast<SecPlusCommon::DoorStatus>((data >> 8) & 0xF);
                         state.obstruction_state = (data >> 22) & 0x1;
                         state.lock_state = (data >> 24) & 0x1;
                         state.light_state = (data >> 25) & 0x1;
@@ -501,7 +501,7 @@ namespace SecPlus1 {
     };
 
     typedef struct {
-        Common::DoorStatus door_state;
+        SecPlusCommon::DoorStatus door_state;
         bool light_state;
         bool lock_state;
         bool obstruction_state;
@@ -583,7 +583,7 @@ namespace SecPlus1 {
                 return state.lock_state;
             }
 
-            Common::DoorStatus get_door_state() {
+            SecPlusCommon::DoorStatus get_door_state() {
                 return state.door_state;
             }
 
@@ -596,7 +596,7 @@ namespace SecPlus1 {
             bool check_collision;
 
             state_struct_t state {
-                door_state: Common::DoorStatus::UNKNOWN,
+                door_state: SecPlusCommon::DoorStatus::UNKNOWN,
                 light_state: false,
                 lock_state: false,
                 obstruction_state: false,
@@ -611,7 +611,7 @@ namespace SecPlus1 {
             uint8_t current_command = 0;
 
             NEW_COMMAND_BUFFER(internal_buffer, 1, COMMAND_BUFFER_CAPACITY);
-            Common::CommandBuffer buf = Common::CommandBuffer(1, COMMAND_BUFFER_CAPACITY, internal_buffer);
+            SecPlusCommon::CommandBuffer buf = SecPlusCommon::CommandBuffer(1, COMMAND_BUFFER_CAPACITY, internal_buffer);
             uint64_t next_command_time;
             uint64_t next_sync_time;
 
@@ -627,7 +627,7 @@ namespace SecPlus1 {
                 if (packet) {
                     *packet = delay >> 8;
                     *(packet + 1) = delay & 0xFF;
-                    *(packet + Common::metadata_size) = static_cast<uint8_t>(command);
+                    *(packet + SecPlusCommon::metadata_size) = static_cast<uint8_t>(command);
                     return 0;
                 } else {
                     return -1;
@@ -682,18 +682,18 @@ namespace SecPlus1 {
                             switch (val) {
                                 case 0x00:
                                 case 0x06:
-                                    state.door_state = Common::DoorStatus::STOPPED;
+                                    state.door_state = SecPlusCommon::DoorStatus::STOPPED;
                                 case 0x01:
-                                    state.door_state = Common::DoorStatus::OPENING;
+                                    state.door_state = SecPlusCommon::DoorStatus::OPENING;
                                 case 0x02:
-                                    state.door_state = Common::DoorStatus::OPEN;
+                                    state.door_state = SecPlusCommon::DoorStatus::OPEN;
                                 // No 0x03
                                 case 0x04:
-                                    state.door_state = Common::DoorStatus::CLOSING;
+                                    state.door_state = SecPlusCommon::DoorStatus::CLOSING;
                                 case 0x05:
-                                    state.door_state = Common::DoorStatus::CLOSED;
+                                    state.door_state = SecPlusCommon::DoorStatus::CLOSED;
                                 default:
-                                    state.door_state = Common::DoorStatus::UNKNOWN;
+                                    state.door_state = SecPlusCommon::DoorStatus::UNKNOWN;
                             }
 
                             break;

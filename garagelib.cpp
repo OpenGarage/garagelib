@@ -234,24 +234,24 @@ namespace SecPlus2 {
             }
 
             void loop() {
-                if (state.door_state == DoorStatus::UNKNOWN && millis() > next_sync_time) {
-                    request_status();
-                    request_openings();
-                    next_sync_time = millis() + SYNC_DELAY;
-                }
-
-                if (buf.get_size() && millis() > next_command_time) {
-                    if (!send_data(buf.get_head())) {
-                        // No error then pop the head off as the command was successfully sent.
-                        buf.pop();
-                    } else {
-                        GARAGELIB_PRINTLN("Command failed to send");
+                if (!serial.available()) {
+                    if (state.door_state == DoorStatus::UNKNOWN && millis() > next_sync_time) {
+                        request_status();
+                        request_openings();
+                        next_sync_time = millis() + SYNC_DELAY;
                     }
 
-                    next_command_time = millis() + COMMAND_DELAY;
-                }
+                    if (buf.get_size() && millis() > next_command_time) {
+                        if (!send_data(buf.get_head())) {
+                            // No error then pop the head off as the command was successfully sent.
+                            buf.pop();
+                        } else {
+                            GARAGELIB_PRINTLN("Command failed to send");
+                        }
 
-                if (serial.available()) {
+                        next_command_time = millis() + COMMAND_DELAY;
+                    }
+                } else {
                     if (reader.read_byte(serial.read())) {
                         // If the packet is complete
                         process_packet(reader.get_packet());

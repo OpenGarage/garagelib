@@ -12,6 +12,65 @@
 #define GARAGELIB_PRINTLN(x)
 #endif
 
+namespace Common {
+    const size_t metadata_size = 2;
+    #define NEW_COMMAND_BUFFER(NAME, PACKET, CAP) uint8_t NAME[(PACKET+Common::metadata_size)*CAP]
+
+    enum class DoorStatus : uint8_t {
+        UNKNOWN = 0,
+        OPEN,
+        CLOSED,
+        STOPPED,
+        OPENING,
+        CLOSING,
+    };
+    
+    class CommandBuffer {
+        public:
+            CommandBuffer(const size_t packet_size, const size_t buffer_capacity, uint8_t *buffer) {
+                this->packet_size = packet_size + metadata_size;
+                this->buffer_capacity = buffer_capacity;
+                this->buffer = buffer;
+            }
+
+            uint8_t get_size() {
+                return size;
+            }
+
+            uint8_t *get_head() {
+                return buffer + (head_index * packet_size) + metadata_size;
+            }
+
+            uint16_t get_delay() {
+                uint8_t *delay_b = (buffer + (head_index * packet_size));
+                return (((uint16_t) *delay_b) << 8) | *(delay_b+1);
+            }
+
+            void pop() {
+                head_index = (head_index + 1) % buffer_capacity;
+                size -= 1;
+            }
+
+            uint8_t *push_next() {
+                if (size == buffer_capacity) {
+                    return nullptr;
+                } else {
+                    uint8_t next_index = (head_index + size) % buffer_capacity;
+                    uint8_t *b = buffer + (next_index * packet_size);
+                    size += 1;
+                    return b;
+                }
+            }
+        private:
+            uint8_t head_index = 0;
+            uint8_t size = 0;
+            uint8_t *buffer;
+            
+            uint8_t packet_size;
+            size_t buffer_capacity;
+    };
+}
+
 namespace SecPlus2 {
     enum class Command : uint16_t {
         UNKNOWN = 0x000,
@@ -44,15 +103,6 @@ namespace SecPlus2 {
         MAX,
     };
 
-    enum class DoorStatus : uint8_t {
-        UNKNOWN = 0,
-        OPEN,
-        CLOSED,
-        STOPPED,
-        OPENING,
-        CLOSING,
-    };
-
     enum class DoorAction : uint8_t {
         CLOSE = 0,
         OPEN = 1,
@@ -60,8 +110,9 @@ namespace SecPlus2 {
         STOP = 3,
     };
 
-    #define SEC2_PACKET_SIZE 19
-    #define SEC2_PREAMBLE 0x00550100
+    const size_t SEC2_PACKET_SIZE = 19;
+    const size_t COMMAND_BUFFER_CAPACITY = 10;
+    const uint32_t SEC2_PREAMBLE = 0x00550100;
 
     class SecPlusReader {
         public:
@@ -106,46 +157,11 @@ namespace SecPlus2 {
             uint32_t preamble = 0;
     };
 
-    #define COMMAND_BUFFER_CAPACITY 10
-
-    class CommandBuffer {
-        public:
-            CommandBuffer() {}
-
-            uint8_t get_size() {
-                return size;
-            }
-
-            uint8_t *get_head() {
-                return buffer + (head_index * SEC2_PACKET_SIZE);
-            }
-
-            void pop() {
-                head_index = (head_index + 1) % COMMAND_BUFFER_CAPACITY;
-                size -= 1;
-            }
-
-            uint8_t *push_next() {
-                if (size == COMMAND_BUFFER_CAPACITY) {
-                    return nullptr;
-                } else {
-                    uint8_t next_index = (head_index + size) % COMMAND_BUFFER_CAPACITY;
-                    uint8_t *b = buffer + (next_index * SEC2_PACKET_SIZE);
-                    size += 1;
-                    return b;
-                }
-            }
-        private:
-            uint8_t head_index = 0;
-            uint8_t size = 0;
-            uint8_t buffer[SEC2_PACKET_SIZE * COMMAND_BUFFER_CAPACITY];
-    };
-
-    #define COMMAND_DELAY 100
-    #define SYNC_DELAY 1000
+    const size_t FAILED_COMMAND_DELAY = 100;
+    const size_t SYNC_DELAY = 1000;
 
     typedef struct {
-        DoorStatus door_state;
+        Common::DoorStatus door_state;
         bool light_state;
         bool lock_state;
         bool obstruction_state;
@@ -162,7 +178,6 @@ namespace SecPlus2 {
         public:
             Garage(uint32_t client_id, int rx_pin, int tx_pin, bool check_collision = true) {
                 this->client_id = client_id;
-                this->protocol_version = 2;
                 this->check_collision = check_collision;
                 this->rx_pin = rx_pin;
                 this->tx_pin = tx_pin;
@@ -178,31 +193,31 @@ namespace SecPlus2 {
             }
 
             int8_t request_status() {
-                return queue_command(Command::GET_STATUS, 0, 0);
+                return queue_command(Command::GET_STATUS, 0, 0, 100);
             }
 
             int8_t request_openings() {
-                return queue_command(Command::GET_OPENINGS, 0, 0);
+                return queue_command(Command::GET_OPENINGS, 0, 0, 100);
             }
 
             int8_t set_lock(bool lock_status) {
                 // Lock status should be the 1st and 2nd bits of data, 00 and 01 are off and on
-                return queue_command(Command::LOCK, lock_status, 0);
+                return queue_command(Command::LOCK, lock_status, 0, 100);
             }
             
             int8_t toggle_lock() {
                 // Lock status should be the 1st and 2nd bits of data, 10 is toggle
-                return queue_command(Command::LOCK, 0b10, 0);
+                return queue_command(Command::LOCK, 0b10, 0, 100);
             }
 
             int8_t set_light(bool light_status) {
                 // Light status should be the 1st and 2nd bits of data, 00 and 01 are off and on
-                return queue_command(Command::LIGHT, light_status, 0);
+                return queue_command(Command::LIGHT, light_status, 0, 100);
             }
 
             int8_t toggle_light() {
                 // Light status should be the 1st and 2nd bits of data, 10 is toggle
-                return queue_command(Command::LIGHT, 0b10, 0);
+                return queue_command(Command::LIGHT, 0b10, 0, 100);
             }
 
             int8_t set_door(DoorAction door_action) {
@@ -217,9 +232,9 @@ namespace SecPlus2 {
                 data_high |= door_id << 8;
 
                 // First send a pressed then a releaase
-                int8_t err = queue_command(Command::DOOR_ACTION, static_cast<uint8_t>(door_action), data_high+1);
+                int8_t err = queue_command(Command::DOOR_ACTION, static_cast<uint8_t>(door_action), data_high+1, 250);
                 if (err < 0) return err;
-                return queue_command(Command::DOOR_ACTION, static_cast<uint8_t>(door_action), data_high);
+                return queue_command(Command::DOOR_ACTION, static_cast<uint8_t>(door_action), data_high, 40);
             }
 
             int8_t open_door() {
@@ -240,7 +255,7 @@ namespace SecPlus2 {
 
             void loop() {
                 if (!serial.available()) {
-                    if (state.door_state == DoorStatus::UNKNOWN && millis() > next_sync_time) {
+                    if (state.door_state == Common::DoorStatus::UNKNOWN && millis() > next_sync_time) {
                         request_status();
                         request_openings();
                         next_sync_time = millis() + SYNC_DELAY;
@@ -249,12 +264,13 @@ namespace SecPlus2 {
                     if (buf.get_size() && millis() > next_command_time) {
                         if (!send_data(buf.get_head())) {
                             // No error then pop the head off as the command was successfully sent.
+                            uint8_t delay = 
+                            next_command_time = millis() + buf.get_delay();
                             buf.pop();
                         } else {
                             GARAGELIB_PRINTLN("Command failed to send");
+                            next_command_time = millis() + FAILED_COMMAND_DELAY;
                         }
-
-                        next_command_time = millis() + COMMAND_DELAY;
                     }
                 } else {
                     if (reader.read_byte(serial.read())) {
@@ -272,7 +288,7 @@ namespace SecPlus2 {
                 return state.lock_state;
             }
 
-            DoorStatus get_door_state() {
+            Common::DoorStatus get_door_state() {
                 return state.door_state;
             }
 
@@ -286,12 +302,12 @@ namespace SecPlus2 {
 
         private:
             uint32_t client_id;
+            // Rolling code can just start at 0 since it will end up resycing while it tries to update it's state at the start.
             uint32_t rolling_code = 0;
-            uint8_t protocol_version;
             bool check_collision;
 
             state_struct_t state {
-                door_state: DoorStatus::UNKNOWN,
+                door_state: Common::DoorStatus::UNKNOWN,
                 light_state: false,
                 lock_state: false,
                 obstruction_state: false,
@@ -306,7 +322,8 @@ namespace SecPlus2 {
             int rx_pin;
             int tx_pin;
             SecPlusReader reader;
-            CommandBuffer buf;
+            NEW_COMMAND_BUFFER(internal_buffer, SEC2_PACKET_SIZE, COMMAND_BUFFER_CAPACITY);
+            Common::CommandBuffer buf = Common::CommandBuffer(SEC2_PACKET_SIZE, COMMAND_BUFFER_CAPACITY, internal_buffer);
             uint64_t next_command_time;
             uint64_t next_sync_time;
 
@@ -317,10 +334,12 @@ namespace SecPlus2 {
                 if (state_callback) state_callback(state);
             }
 
-            int8_t queue_command(Command command, uint8_t data_low, uint16_t data_high) {
+            int8_t queue_command(Command command, uint8_t data_low, uint16_t data_high, uint16_t delay) {
                 uint8_t *packet = buf.push_next();
                 if (packet) {
-                    return encode_data(static_cast<uint16_t>(command), data_low, data_high, packet);
+                    *packet = delay >> 8;
+                    *(packet + 1) = delay & 0xFF;
+                    return encode_data(static_cast<uint16_t>(command), data_low, data_high, packet + Common::metadata_size);
                 } else {
                     return -1;
                 }
@@ -381,8 +400,8 @@ namespace SecPlus2 {
                 uint32_t rolling;
                 uint64_t fixed;
                 uint32_t data;
-                int8_t err;
-                if (decode_wireline(packet, &rolling, &fixed, &data) < 0) return err;
+                int8_t err = decode_wireline(packet, &rolling, &fixed, &data);
+                if (err < 0) return err;
 
                 #ifdef GARAGELIB_DEBUG
                 uint32_t r = 0;
@@ -406,7 +425,7 @@ namespace SecPlus2 {
 
                 switch (command) {
                     case Command::STATUS:
-                        state.door_state = static_cast<DoorStatus>((data >> 8) & 0xF);
+                        state.door_state = static_cast<Common::DoorStatus>((data >> 8) & 0xF);
                         state.obstruction_state = (data >> 22) & 0x1;
                         state.lock_state = (data >> 24) & 0x1;
                         state.light_state = (data >> 25) & 0x1;
@@ -458,5 +477,249 @@ namespace SecPlus2 {
 }
 
 namespace SecPlus1 {
+    // From gdolib
+    // Send packet each 250 ms
+    const uint8_t wall_pannel_commands[] = { 0x35, 0x35, 0x35, 0x35, 0x33, 0x33, 0x53, 0x53, 0x38,
+                                    0x3A, 0x3A, 0x3A, 0x39, 0x38, 0x3A, 0x38, 0x3A, 0x39, 0x3A };
+
+    enum class Command : uint8_t
+    {
+        DOOR_BUTTON_PRESS = 0x30,
+        DOOR_BUTTON_RELEASE = 0x31,
+        LIGHT_BUTTON_PRESS = 0x32,
+        LIGHT_BUTTON_RELEASE = 0x33,
+        LOCK_BUTTON_PRESS = 0x34,
+        LOCK_BUTTON_RELEASE = 0x35,
+
+        UNKOWN_0X36 = 0x36,
+        UNKNOWN_0X37 = 0x37,
+
+        DOOR_STATUS = 0x38,
+        OBSTRUCTION_STATUS = 0x39, // this is not proven
+        LIGHT_LOCK_STATUS = 0x3A,
+        UNKNOWN = 0xFF
+    };
+
+    typedef struct {
+        Common::DoorStatus door_state;
+        bool light_state;
+        bool lock_state;
+        bool obstruction_state;
+    } state_struct_t;
+
+    typedef void (*state_callback_t)(state_struct_t state);
     
+    const size_t COMMAND_BUFFER_CAPACITY = 20;
+
+    class Garage {
+        public:
+            Garage(int rx_pin, int tx_pin, bool check_collision = true) {
+                this->check_collision = check_collision;
+                this->rx_pin = rx_pin;
+                this->tx_pin = tx_pin;
+
+                // Start Serial with 8 bits even parity parity 1 stop bit and inverted
+                this->serial.begin(1200, SWSERIAL_8E1, rx_pin, tx_pin, true);
+            }
+
+            void enable_callback(state_callback_t callback) {
+                this->state_callback = callback;
+            }
+
+            int8_t request_door_status() {
+                return queue_command(Command::DOOR_STATUS, 100);
+            }
+
+            int8_t request_obstruction_status() {
+                return queue_command(Command::OBSTRUCTION_STATUS, 100);
+            }
+
+            int8_t request_light_lock_status() {
+                return queue_command(Command::LIGHT_LOCK_STATUS, 100);
+            }
+
+            int8_t toggle_lock() {
+                queue_command(Command::LOCK_BUTTON_PRESS, 250);
+                queue_command(Command::LOCK_BUTTON_RELEASE, 40);
+                return queue_command(Command::LOCK_BUTTON_RELEASE, 40);
+            }
+
+            int8_t toggle_light() {
+                queue_command(Command::LIGHT_BUTTON_PRESS, 250);
+                queue_command(Command::LIGHT_BUTTON_RELEASE, 40);
+                return queue_command(Command::LIGHT_BUTTON_RELEASE, 40);
+            }
+
+            int8_t toggle_door() {
+                queue_command(Command::DOOR_BUTTON_PRESS, 250);
+                queue_command(Command::DOOR_BUTTON_RELEASE, 40);
+                return queue_command(Command::DOOR_BUTTON_RELEASE, 40);
+            }
+
+            void loop() {
+                if (!serial.available()) {
+                    // TODO: Wall pannel emulation and wall pannel detection
+                    // if (state.door_state == DoorStatus::UNKNOWN && millis() > next_sync_time) {
+                    //     request_status();
+                    //     request_openings();
+                    //     next_sync_time = millis() + SYNC_DELAY;
+                    // }
+
+                    if (buf.get_size() && millis() > next_command_time) {
+                        send_data(buf.get_head());
+                        buf.pop();
+                        next_command_time = millis() + buf.get_delay();
+                    }
+                } else {
+                    process_packet(serial.read());
+                }
+            }
+
+            bool get_light_state() {
+                return state.light_state;
+            }
+
+            bool get_lock_state() {
+                return state.lock_state;
+            }
+
+            Common::DoorStatus get_door_state() {
+                return state.door_state;
+            }
+
+            bool get_obstruction_state() {
+                return state.obstruction_state;
+            }
+
+        private:
+            uint32_t client_id;
+            bool check_collision;
+
+            state_struct_t state {
+                door_state: Common::DoorStatus::UNKNOWN,
+                light_state: false,
+                lock_state: false,
+                obstruction_state: false,
+            };
+            
+            SoftwareSerial serial;
+            int rx_pin;
+            int tx_pin;
+
+            bool emulate_wall_pannel = false;
+
+            uint8_t current_command = 0;
+
+            NEW_COMMAND_BUFFER(internal_buffer, 1, COMMAND_BUFFER_CAPACITY);
+            Common::CommandBuffer buf = Common::CommandBuffer(1, COMMAND_BUFFER_CAPACITY, internal_buffer);
+            uint64_t next_command_time;
+            uint64_t next_sync_time;
+
+            state_callback_t state_callback;
+
+            
+            void update_callback() {
+                if (state_callback) state_callback(state);
+            }
+
+            int8_t queue_command(Command command, uint16_t delay) {
+                uint8_t *packet = buf.push_next();
+                if (packet) {
+                    *packet = delay >> 8;
+                    *(packet + 1) = delay & 0xFF;
+                    *(packet + Common::metadata_size) = static_cast<uint8_t>(command);
+                    return 0;
+                } else {
+                    return -1;
+                }
+            }
+
+            void send_data(uint8_t *packet) {
+                #ifdef GARAGELIB_DEBUG
+                GARAGELIB_PRINT_TAG;
+                Serial.print("[OUTGOING PACKET] Command: ");
+                Serial.print(*packet);
+                Serial.println(".");
+                #endif
+
+                serial.write(packet, 1);
+                delayMicroseconds(100);
+            }
+
+            int8_t process_packet(uint8_t packet) {
+                if (!current_command) {
+                    Command command = static_cast<Command>(packet);
+                    switch (command) {
+                        case Command::DOOR_STATUS:
+                        case Command::OBSTRUCTION_STATUS:
+                        case Command::LIGHT_LOCK_STATUS:
+                            // Requires second byte
+                            current_command = packet;
+                            break;
+                        default:
+                            // Only handle the status commands for now
+                            #ifdef GARAGELIB_DEBUG
+                            GARAGELIB_PRINT_TAG;
+                            Serial.print("[INCOMING PACKET] Command: ");
+                            Serial.print(packet, HEX);
+                            Serial.println(".");
+                            #endif
+                            break;
+                    }
+                } else {
+                    #ifdef GARAGELIB_DEBUG
+                    GARAGELIB_PRINT_TAG;
+                    Serial.print("[INCOMING PACKET] Command: ");
+                    Serial.print(current_command, HEX);
+                    Serial.print(" data: ");
+                    Serial.print(packet, HEX);
+                    Serial.println(".");
+                    #endif
+                    Command command = static_cast<Command>(current_command);
+                    switch (command) {
+                        case Command::DOOR_STATUS: {
+                            uint8_t val = packet & 0x7;
+                            switch (val) {
+                                case 0x00:
+                                case 0x06:
+                                    state.door_state = Common::DoorStatus::STOPPED;
+                                case 0x01:
+                                    state.door_state = Common::DoorStatus::OPENING;
+                                case 0x02:
+                                    state.door_state = Common::DoorStatus::OPEN;
+                                // No 0x03
+                                case 0x04:
+                                    state.door_state = Common::DoorStatus::CLOSING;
+                                case 0x05:
+                                    state.door_state = Common::DoorStatus::CLOSED;
+                                default:
+                                    state.door_state = Common::DoorStatus::UNKNOWN;
+                            }
+
+                            break;
+                        }
+                        case Command::OBSTRUCTION_STATUS:
+                            state.obstruction_state = packet != 0;
+                            break;
+                        case Command::LIGHT_LOCK_STATUS:
+                            // upper nibble must be 5
+                            if ((packet & 0xF0) != 0x50) {
+                                break;
+                            }
+
+                            // Light state in bit 2
+                            state.light_state = (packet >> 2) & 1;
+                            // Light state in bit 3, but inverted
+                            state.lock_state = (~packet >> 3) & 1;
+
+                            break;
+                        default:
+                            // Unreachable
+                            break;
+                    }
+                    current_command = 0;
+                }
+                return 0;
+            }
+    };
 }

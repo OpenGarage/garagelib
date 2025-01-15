@@ -695,11 +695,12 @@ namespace SecPlus1 {
                                 default:
                                     state.door_state = SecPlusCommon::DoorStatus::UNKNOWN;
                             }
-
+                            update_callback()
                             break;
                         }
                         case Command::OBSTRUCTION_STATUS:
                             state.obstruction_state = packet != 0;
+                            update_callback()
                             break;
                         case Command::LIGHT_LOCK_STATUS:
                             // upper nibble must be 5
@@ -711,7 +712,7 @@ namespace SecPlus1 {
                             state.light_state = (packet >> 2) & 1;
                             // Light state in bit 3, but inverted
                             state.lock_state = (~packet >> 3) & 1;
-
+                            update_callback()
                             break;
                         default:
                             // Unreachable

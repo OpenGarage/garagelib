@@ -264,6 +264,7 @@ namespace SecPlus2 {
                     if (buf.get_size() && millis() > next_command_time) {
                         if (!send_data(buf.get_head())) {
                             // No error then pop the head off as the command was successfully sent.
+                            process_packet(buf.get_head());
                             next_command_time = millis() + buf.get_delay();
                             buf.pop();
                         } else {
@@ -274,7 +275,25 @@ namespace SecPlus2 {
                 } else {
                     if (reader.read_byte(serial.read())) {
                         // If the packet is complete
-                        process_packet(reader.get_packet());
+                        uint8_t *packet = reader.get_packet();
+                        #ifdef GARAGELIB_DEBUG
+                        uint32_t r = 0;
+                        uint64_t i = 0;
+                        uint16_t c = 0;
+                        uint32_t p = 0;
+                        decode_wireline_command(packet, &r, &i, &c, &p);
+                        GARAGELIB_PRINT_TAG;
+                        Serial.print("[INCOMING PACKET] Rolling code: ");
+                        Serial.print(r);
+                        Serial.print(" id: ");
+                        Serial.print(i, HEX);
+                        Serial.print(" command: ");
+                        Serial.print(c, HEX);
+                        Serial.print(" payload: ");
+                        Serial.print(p, HEX);
+                        Serial.println(".");
+                        #endif
+                        process_packet(packet);
                     }
                 }
             }
@@ -402,24 +421,6 @@ namespace SecPlus2 {
                 int8_t err = decode_wireline(packet, &rolling, &fixed, &data);
                 if (err < 0) return err;
 
-                #ifdef GARAGELIB_DEBUG
-                uint32_t r = 0;
-                uint64_t i = 0;
-                uint16_t c = 0;
-                uint32_t p = 0;
-                decode_wireline_command(packet, &r, &i, &c, &p);
-                GARAGELIB_PRINT_TAG;
-                Serial.print("[INCOMING PACKET] Rolling code: ");
-                Serial.print(r);
-                Serial.print(" id: ");
-                Serial.print(i, HEX);
-                Serial.print(" command: ");
-                Serial.print(c, HEX);
-                Serial.print(" payload: ");
-                Serial.print(p, HEX);
-                Serial.println(".");
-                #endif
-
                 Command command = static_cast<Command>(((fixed >> 24) & 0xf00) | (data & 0xff));
 
                 switch (command) {
@@ -431,7 +432,7 @@ namespace SecPlus2 {
                         update_callback();
                         break;
                     case Command::LOCK:
-                        switch ((data >> 8) & 0x11) {
+                        switch ((data >> 8) & 0b11) {
                             case 0b00:
                                 state.lock_state = false;
                             case 0b01:
@@ -446,7 +447,7 @@ namespace SecPlus2 {
                         update_callback();
                         break;
                     case Command::LIGHT:
-                        switch ((data >> 8) & 0x11) {
+                        switch ((data >> 8) & 0b11) {
                             case 0b00:
                                 state.light_state = false;
                             case 0b01:

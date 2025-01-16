@@ -264,7 +264,6 @@ namespace SecPlus2 {
                     if (buf.get_size() && millis() > next_command_time) {
                         if (!send_data(buf.get_head())) {
                             // No error then pop the head off as the command was successfully sent.
-                            uint8_t delay = 
                             next_command_time = millis() + buf.get_delay();
                             buf.pop();
                         } else {

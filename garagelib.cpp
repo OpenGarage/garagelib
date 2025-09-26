@@ -24,7 +24,7 @@ namespace SecPlusCommon {
         OPENING,
         CLOSING,
     };
-    
+
     class CommandBuffer {
         public:
             CommandBuffer(const size_t packet_size, const size_t buffer_capacity, uint8_t *buffer) {
@@ -65,7 +65,7 @@ namespace SecPlusCommon {
             uint8_t head_index = 0;
             uint8_t size = 0;
             uint8_t *buffer;
-            
+
             uint8_t packet_size;
             size_t buffer_capacity;
     };
@@ -117,7 +117,7 @@ namespace SecPlus2 {
     class SecPlusReader {
         public:
             SecPlusReader() {}
-            
+
             uint8_t* get_packet() {
                 return packet;
             }
@@ -204,7 +204,7 @@ namespace SecPlus2 {
                 // Lock status should be the 1st and 2nd bits of data, 00 and 01 are off and on
                 return queue_command(Command::LOCK, lock_status, 0, 100);
             }
-            
+
             int8_t toggle_lock() {
                 // Lock status should be the 1st and 2nd bits of data, 10 is toggle
                 return queue_command(Command::LOCK, 0b10, 0, 100);
@@ -259,6 +259,11 @@ namespace SecPlus2 {
                         request_status();
                         request_openings();
                         next_sync_time = millis() + SYNC_DELAY;
+                    }
+
+                    if (ask_for_status) {
+                        ask_for_status = false;
+                        request_status();
                     }
 
                     if (buf.get_size() && millis() > next_command_time) {
@@ -323,6 +328,7 @@ namespace SecPlus2 {
             // Rolling code can just start at 0 since it will end up resycing while it tries to update it's state at the start.
             uint32_t rolling_code = 0;
             bool check_collision;
+            bool ask_for_status = false;
 
             state_struct_t state {
                 door_state: SecPlusCommon::DoorStatus::UNKNOWN,
@@ -335,7 +341,7 @@ namespace SecPlus2 {
                 learn_state: false,
                 openings: 0,
             };
-            
+
             SoftwareSerial serial;
             int rx_pin;
             int tx_pin;
@@ -347,7 +353,7 @@ namespace SecPlus2 {
 
             state_callback_t state_callback;
 
-            
+
             void update_callback() {
                 if (state_callback) state_callback(state);
             }
@@ -466,6 +472,10 @@ namespace SecPlus2 {
                         state.openings = ((data >> 8) & 0xFF00) | ((data >> 24) & 0xFF);
                         update_callback();
                         break;
+                    case Command::PAIR_3_RESP:
+                    case Command::OBST_1:
+                        ask_for_status = true; // possible obstruction detected, request status asap
+                        break;
                     default:
                         // Unknown command
                         break;
@@ -508,7 +518,7 @@ namespace SecPlus1 {
     } state_struct_t;
 
     typedef void (*state_callback_t)(state_struct_t state);
-    
+
     const size_t COMMAND_BUFFER_CAPACITY = 20;
 
     class Garage {
@@ -601,7 +611,7 @@ namespace SecPlus1 {
                 lock_state: false,
                 obstruction_state: false,
             };
-            
+
             SoftwareSerial serial;
             int rx_pin;
             int tx_pin;
@@ -617,7 +627,7 @@ namespace SecPlus1 {
 
             state_callback_t state_callback;
 
-            
+
             void update_callback() {
                 if (state_callback) state_callback(state);
             }

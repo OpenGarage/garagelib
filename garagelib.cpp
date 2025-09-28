@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 
+#define GARAGELIB_DEBUG
 #ifdef GARAGELIB_DEBUG
 #define GARAGELIB_PRINT_TAG Serial.print("[GARAGELIB] ")
 #define GARAGELIB_PRINT(x) GARAGELIB_PRINT_TAG; Serial.print(x)
@@ -489,7 +490,7 @@ namespace SecPlus2 {
 namespace SecPlus1 {
     // From gdolib
     // Send packet each 250 ms
-    const uint8_t wall_pannel_commands[] = { 0x35, 0x35, 0x35, 0x35, 0x33, 0x33, 0x53, 0x53, 0x38,
+    const uint8_t wall_panel_commands[] = { 0x35, 0x35, 0x35, 0x35, 0x33, 0x33, 0x53, 0x53, 0x38,
                                     0x3A, 0x3A, 0x3A, 0x39, 0x38, 0x3A, 0x38, 0x3A, 0x39, 0x3A };
 
     enum class Command : uint8_t
@@ -569,11 +570,15 @@ namespace SecPlus1 {
             void loop() {
                 if (!serial.available()) {
                     // TODO: Wall pannel emulation and wall pannel detection
-                    // if (state.door_state == DoorStatus::UNKNOWN && millis() > next_sync_time) {
-                    //     request_status();
-                    //     request_openings();
-                    //     next_sync_time = millis() + SYNC_DELAY;
-                    // }
+                    if (millis()>10000UL && millis() > next_sync_time) {
+                        uint8_t command_to_send = wall_panel_commands[emulation_command_index];
+                        send_data(&command_to_send);
+                        emulation_command_index++;
+                        if (emulation_command_index == 18) {
+                            emulation_command_index = 15;
+                        }
+                        next_sync_time = millis() + 250;
+                    }
 
                     if (buf.get_size() && millis() > next_command_time) {
                         send_data(buf.get_head());
@@ -581,7 +586,8 @@ namespace SecPlus1 {
                         next_command_time = millis() + buf.get_delay();
                     }
                 } else {
-                    process_packet(serial.read());
+                    uint8_t packet = serial.read();
+                    process_packet(packet);
                 }
             }
 
@@ -616,7 +622,7 @@ namespace SecPlus1 {
             int rx_pin;
             int tx_pin;
 
-            bool emulate_wall_pannel = false;
+            bool emulate_wall_panel = false;
 
             uint8_t current_command = 0;
 
@@ -624,7 +630,7 @@ namespace SecPlus1 {
             SecPlusCommon::CommandBuffer buf = SecPlusCommon::CommandBuffer(1, COMMAND_BUFFER_CAPACITY, internal_buffer);
             uint64_t next_command_time;
             uint64_t next_sync_time;
-
+            uint8_t emulation_command_index = 0;
             state_callback_t state_callback;
 
 
@@ -646,10 +652,10 @@ namespace SecPlus1 {
 
             void send_data(uint8_t *packet) {
                 #ifdef GARAGELIB_DEBUG
-                GARAGELIB_PRINT_TAG;
+                /*GARAGELIB_PRINT_TAG;
                 Serial.print("[OUTGOING PACKET] Command: ");
                 Serial.print(*packet);
-                Serial.println(".");
+                Serial.println(".");*/
                 #endif
 
                 serial.write(packet, 1);
@@ -693,15 +699,20 @@ namespace SecPlus1 {
                                 case 0x00:
                                 case 0x06:
                                     state.door_state = SecPlusCommon::DoorStatus::STOPPED;
+                                    break;
                                 case 0x01:
                                     state.door_state = SecPlusCommon::DoorStatus::OPENING;
+                                    break;
                                 case 0x02:
                                     state.door_state = SecPlusCommon::DoorStatus::OPEN;
+                                    break;
                                 // No 0x03
                                 case 0x04:
                                     state.door_state = SecPlusCommon::DoorStatus::CLOSING;
+                                    break;
                                 case 0x05:
                                     state.door_state = SecPlusCommon::DoorStatus::CLOSED;
+                                    break;
                                 default:
                                     state.door_state = SecPlusCommon::DoorStatus::UNKNOWN;
                             }

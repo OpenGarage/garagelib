@@ -5,7 +5,7 @@
 
 #define GARAGELIB_DEBUG
 #ifdef GARAGELIB_DEBUG
-#define GARAGELIB_PRINT_TAG Serial.print("[GARAGELIB] ")
+#define GARAGELIB_PRINT_TAG Serial.print(F("[GARAGELIB] "))
 #define GARAGELIB_PRINT(x) GARAGELIB_PRINT_TAG; Serial.print(x)
 #define GARAGELIB_PRINTLN(x) GARAGELIB_PRINT_TAG; Serial.println(x)
 #else
@@ -14,7 +14,15 @@
 #endif
 
 namespace SecPlusCommon {
-    const size_t metadata_size = 2;
+    static const size_t metadata_size = 2;
+    static SoftwareSerial *sw_serial = NULL;
+    static void delete_sw_serial() {
+        if(sw_serial != NULL) {
+            sw_serial->end();
+            delete sw_serial;
+            sw_serial = NULL;
+        }
+    }
     #define NEW_COMMAND_BUFFER(NAME, PACKET, CAP) uint8_t NAME[(PACKET+SecPlusCommon::metadata_size)*CAP]
 
     enum class DoorStatus : uint8_t {
@@ -183,10 +191,14 @@ namespace SecPlus2 {
                 this->rx_pin = rx_pin;
                 this->tx_pin = tx_pin;
                 this->reader = SecPlusReader();
+            }
 
+            void begin() {
+                SecPlusCommon::delete_sw_serial();
+                SecPlusCommon::sw_serial = new SoftwareSerial();
                 // Start Serial with 8 bits no parity 1 stop bit and inverted
-                this->serial.begin(9600, SWSERIAL_8N1, rx_pin, tx_pin, true);
-                this->serial.enableIntTx(false);
+                SecPlusCommon::sw_serial->begin(9600, SWSERIAL_8N1, rx_pin, tx_pin, true);
+                SecPlusCommon::sw_serial->enableIntTx(false);
             }
 
             void enable_callback(state_callback_t callback) {
@@ -255,7 +267,9 @@ namespace SecPlus2 {
             }
 
             void loop() {
-                if (!serial.available()) {
+                if(!SecPlusCommon::sw_serial) return;
+
+                if (!SecPlusCommon::sw_serial->available()) {
                     if (state.door_state == SecPlusCommon::DoorStatus::UNKNOWN && millis() > next_sync_time) {
                         request_status();
                         request_openings();
@@ -274,12 +288,12 @@ namespace SecPlus2 {
                             next_command_time = millis() + buf.get_delay();
                             buf.pop();
                         } else {
-                            GARAGELIB_PRINTLN("Command failed to send");
+                            GARAGELIB_PRINTLN(F("Command failed to send"));
                             next_command_time = millis() + FAILED_COMMAND_DELAY;
                         }
                     }
                 } else {
-                    if (reader.read_byte(serial.read())) {
+                    if (reader.read_byte(SecPlusCommon::sw_serial->read())) {
                         // If the packet is complete
                         uint8_t *packet = reader.get_packet();
                         #ifdef GARAGELIB_DEBUG
@@ -289,19 +303,54 @@ namespace SecPlus2 {
                         uint32_t p = 0;
                         decode_wireline_command(packet, &r, &i, &c, &p);
                         GARAGELIB_PRINT_TAG;
-                        Serial.print("[INCOMING PACKET] Rolling code: ");
+                        Serial.print(F("[INCOMING PACKET] Rolling code: "));
                         Serial.print(r);
-                        Serial.print(" id: ");
+                        Serial.print(F(" id: "));
                         Serial.print(i, HEX);
-                        Serial.print(" command: ");
+                        Serial.print(F(" command: "));
                         Serial.print(c, HEX);
-                        Serial.print(" payload: ");
+                        Serial.print(F(" payload: "));
                         Serial.print(p, HEX);
                         Serial.println(".");
                         #endif
                         process_packet(packet);
                     }
                 }
+            }
+
+            bool detect() {
+                this->begin();
+                state_callback_t cb_backup = this->state_callback;
+                this->state_callback = NULL; // temporarily disable callback since we are only doing detection
+                this->state.door_state = SecPlusCommon::DoorStatus::UNKNOWN;
+                this->next_sync_time = 0;
+
+                GARAGELIB_PRINTLN(F("Verifying SecPlus 2.0..."));
+                // Also clear timers and buffers for a clean test run
+                this->next_command_time = 0;
+                while(buf.get_size() > 0) buf.pop();
+
+                unsigned long startTime = millis();
+                // Run for up to 5 seconds
+                while (millis() - startTime < 5000) {
+
+                    // Your proposal Step 3: Call loop() repeatedly
+                    this->loop();
+
+                    // Your proposal Step 4: Check if the door status is no longer unknown
+                    if (this->state.door_state != SecPlusCommon::DoorStatus::UNKNOWN) {
+                        GARAGELIB_PRINTLN(F("Verification PASSED: State updated via internal loop."));
+                        //SecPlusCommon::sw_serial->end(); // Release the serial port
+                        this->state_callback = cb_backup; // recover original callback function
+                        return true;
+                    }
+                    yield();
+                }
+
+                GARAGELIB_PRINTLN(F("Verification FAILED: No valid status after 5s."));
+                //SecPlusCommon::sw_serial->end(); // Release the serial port
+                this->state_callback = cb_backup; // recover original callback function
+                return false;
             }
 
             bool get_light_state() {
@@ -343,7 +392,6 @@ namespace SecPlus2 {
                 openings: 0,
             };
 
-            SoftwareSerial serial;
             int rx_pin;
             int tx_pin;
             SecPlusReader reader;
@@ -352,7 +400,7 @@ namespace SecPlus2 {
             uint64_t next_command_time;
             uint64_t next_sync_time;
 
-            state_callback_t state_callback;
+            state_callback_t state_callback = NULL;
 
 
             void update_callback() {
@@ -371,6 +419,7 @@ namespace SecPlus2 {
             }
 
             int8_t send_data(uint8_t *packet) {
+                if(!SecPlusCommon::sw_serial) return -1;
                 // Use mosfet to pull bus low (open drain) to take control of bus
                 digitalWrite(tx_pin, HIGH);
                 delayMicroseconds(1300);
@@ -388,25 +437,25 @@ namespace SecPlus2 {
                 uint32_t p = 0;
                 decode_wireline_command(packet, &r, &i, &c, &p);
                 GARAGELIB_PRINT_TAG;
-                Serial.print("[OUTGOING PACKET] Rolling code: ");
+                Serial.print(F("[OUTGOING PACKET] Rolling code: "));
                 Serial.print(r);
-                Serial.print(" id: ");
+                Serial.print(F(" id: "));
                 Serial.print(i, HEX);
-                Serial.print(" command: ");
+                Serial.print(F(" command: "));
                 Serial.print(c, HEX);
-                Serial.print(" payload: ");
+                Serial.print(F(" payload: "));
                 Serial.print(p, HEX);
                 Serial.println(".");
 
                 GARAGELIB_PRINT_TAG;
-                Serial.print("Sending packet: [");
+                Serial.print(F("Sending packet: ["));
                 for (int i = 0; i < SEC2_PACKET_SIZE; i++) {
                     Serial.print(packet[i], HEX);
                 }
                 Serial.println("]");
                 #endif
 
-                serial.write(packet, SEC2_PACKET_SIZE);
+                SecPlusCommon::sw_serial->write(packet, SEC2_PACKET_SIZE);
                 delayMicroseconds(100);
 
                 return 0;
@@ -528,9 +577,13 @@ namespace SecPlus1 {
                 this->check_collision = check_collision;
                 this->rx_pin = rx_pin;
                 this->tx_pin = tx_pin;
+            }
 
+            void begin() {
+                SecPlusCommon::delete_sw_serial();
+                SecPlusCommon::sw_serial = new SoftwareSerial();
                 // Start Serial with 8 bits even parity parity 1 stop bit and inverted
-                this->serial.begin(1200, SWSERIAL_8E1, rx_pin, tx_pin, true);
+                SecPlusCommon::sw_serial->begin(1200, SWSERIAL_8E1, rx_pin, tx_pin, true);
             }
 
             void enable_callback(state_callback_t callback) {
@@ -568,7 +621,9 @@ namespace SecPlus1 {
             }
 
             void loop() {
-                if (!serial.available()) {
+                if(!SecPlusCommon::sw_serial) return;
+
+                if (!SecPlusCommon::sw_serial->available()) {
                     // TODO: Wall pannel emulation and wall pannel detection
                     if (millis()>10000UL && millis() > next_sync_time) {
                         uint8_t command_to_send = wall_panel_commands[emulation_command_index];
@@ -586,9 +641,69 @@ namespace SecPlus1 {
                         next_command_time = millis() + buf.get_delay();
                     }
                 } else {
-                    uint8_t packet = serial.read();
-                    process_packet(packet);
+                    process_packet(SecPlusCommon::sw_serial->read());
                 }
+            }
+
+            bool detect() {
+                this->begin();
+                state_callback_t cb_backup = this->state_callback;
+                this->state_callback = NULL; // temporarily disable callback since we are only doing detection
+                this->state.door_state = SecPlusCommon::DoorStatus::UNKNOWN;
+                this->current_command = 0;
+
+                // --- PHASE 1: Passive Listening (2.5 seconds) ---
+                // Listen for an existing wall panel, which is usually very chatty.
+                GARAGELIB_PRINTLN(F("Verifying Sec+ 1.0 -- Phase 1: Passively listening for existing panel..."));
+                unsigned long phase1_startTime = millis();
+                while (millis() - phase1_startTime < 2500) {
+                    if (SecPlusCommon::sw_serial->available()) {
+                        process_packet(SecPlusCommon::sw_serial->read());
+                        // Check if we received and decoded a valid status packet
+                        if (this->state.door_state != SecPlusCommon::DoorStatus::UNKNOWN) {
+                            GARAGELIB_PRINTLN(F("Verification PASSED (Passive): Existing Sec+ 1.0 panel detected."));
+                            //SecPlusCommon::sw_serial->end(); // Release the serial port
+                            this->state_callback = cb_backup; // recover original callback function
+                            return true;
+                        }
+                    }
+                    yield();
+                }
+
+                // --- PHASE 2: Active Probing (5 seconds) ---
+                // If Phase 1 failed, actively emulate a wall panel to get a response from the opener.
+                GARAGELIB_PRINTLN(F("Verifying Sec+ 1.0 -- Phase 2: No panel detected, actively probing opener..."));
+                unsigned long phase2_startTime = millis();
+                uint64_t last_emulation_time = 0;
+                uint8_t emulation_command_index = 0;
+
+                while (millis() - phase2_startTime < 5000) {
+                    if (SecPlusCommon::sw_serial->available()) {
+                        process_packet(SecPlusCommon::sw_serial->read());
+                        if (this->state.door_state != SecPlusCommon::DoorStatus::UNKNOWN) {
+                            GARAGELIB_PRINTLN(F("Verification PASSED (Active): Opener responded to probe."));
+                            //SecPlusCommon::sw_serial->end(); // Release the serial port
+                            this->state_callback = cb_backup;
+                            return true;
+                        }
+                    } else { // Emulation Sender: Send a command every 250ms
+                        if (millis() - last_emulation_time >= 250) {
+                            last_emulation_time = millis();
+                            uint8_t command_to_send = wall_panel_commands[emulation_command_index];
+                            send_data(&command_to_send);
+                            emulation_command_index++;
+                            if (emulation_command_index == 18) {
+                                emulation_command_index = 15;
+                            }
+                        }
+                    }
+                    yield();
+                }
+
+                GARAGELIB_PRINTLN(F("Verification FAILED: No Sec+ 1.0 communication detected."));
+                //SecPlusCommon::sw_serial->end(); // Release the serial port
+                this->state_callback = cb_backup;
+                return false;
             }
 
             bool get_light_state() {
@@ -618,7 +733,6 @@ namespace SecPlus1 {
                 obstruction_state: false,
             };
 
-            SoftwareSerial serial;
             int rx_pin;
             int tx_pin;
 
@@ -631,7 +745,7 @@ namespace SecPlus1 {
             uint64_t next_command_time;
             uint64_t next_sync_time;
             uint8_t emulation_command_index = 0;
-            state_callback_t state_callback;
+            state_callback_t state_callback = NULL;
 
 
             void update_callback() {
@@ -651,14 +765,15 @@ namespace SecPlus1 {
             }
 
             void send_data(uint8_t *packet) {
+                if(!SecPlusCommon::sw_serial) return;
                 #ifdef GARAGELIB_DEBUG
-                /*GARAGELIB_PRINT_TAG;
-                Serial.print("[OUTGOING PACKET] Command: ");
+                GARAGELIB_PRINT_TAG;
+                Serial.print(F("[OUTGOING PACKET] Command: "));
                 Serial.print(*packet);
-                Serial.println(".");*/
+                Serial.println(".");
                 #endif
 
-                serial.write(packet, 1);
+                SecPlusCommon::sw_serial->write(packet, 1);
                 delayMicroseconds(100);
             }
 
@@ -676,7 +791,7 @@ namespace SecPlus1 {
                             // Only handle the status commands for now
                             #ifdef GARAGELIB_DEBUG
                             GARAGELIB_PRINT_TAG;
-                            Serial.print("[INCOMING PACKET] Command: ");
+                            Serial.print(F("[INCOMING PACKET] Command: "));
                             Serial.print(packet, HEX);
                             Serial.println(".");
                             #endif
@@ -685,9 +800,9 @@ namespace SecPlus1 {
                 } else {
                     #ifdef GARAGELIB_DEBUG
                     GARAGELIB_PRINT_TAG;
-                    Serial.print("[INCOMING PACKET] Command: ");
+                    Serial.print(F("[INCOMING PACKET] Command: "));
                     Serial.print(current_command, HEX);
-                    Serial.print(" data: ");
+                    Serial.print(F(" data: "));
                     Serial.print(packet, HEX);
                     Serial.println(".");
                     #endif

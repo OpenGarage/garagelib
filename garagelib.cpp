@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 
-#define GARAGELIB_DEBUG
+//#define GARAGELIB_DEBUG
 #ifdef GARAGELIB_DEBUG
 #define GARAGELIB_PRINT_TAG Serial.print(F("[GARAGELIB] "))
 #define GARAGELIB_PRINT(x) GARAGELIB_PRINT_TAG; Serial.print(x)
@@ -487,7 +487,7 @@ namespace SecPlus2 {
 				switch (command) {
 					case Command::STATUS:
 						state.door_state = static_cast<SecPlusCommon::DoorStatus>((data >> 8) & 0xF);
-						state.obstruction_state = (data >> 22) & 0x1;
+						state.obstruction_state = !((data >> 22) & 0x1); // invert the logic as this seems to be active low
 						state.lock_state = (data >> 24) & 0x1;
 						state.light_state = (data >> 25) & 0x1;
 						update_callback();
@@ -645,9 +645,9 @@ namespace SecPlus1 {
 								panel_emu_status = PanelEmuStatus::INACTIVE;
 								emulation_command_index = 0;
 							}
-							// Check for timeout: 35 seconds have passed without finding a panel
-							else if ((long)(millis() - panel_detection_start) > 35000) {
-								GARAGELIB_PRINTLN(F("No wall panel detected after 35s. Starting active emulation."));
+							// Check for timeout: 20 seconds have passed without finding a panel
+							else if ((long)(millis() - panel_detection_start) > 20000) {
+								GARAGELIB_PRINTLN(F("No wall panel detected after 20s. Starting active emulation."));
 								panel_emu_status = PanelEmuStatus::ACTIVE; // Transition to Active (Emulating)
 								emulation_command_index = 0;
 							}
@@ -765,6 +765,10 @@ namespace SecPlus1 {
 				return state.obstruction_state;
 			}
 
+			uint8_t get_panel_emu_status() {
+				return static_cast<uint8_t>(panel_emu_status);
+			}
+
 		private:
 			uint32_t client_id;
 			bool check_collision;
@@ -793,10 +797,6 @@ namespace SecPlus1 {
 
 			void update_callback() {
 				if (state_callback) state_callback(state);
-			}
-
-			uint8_t get_panel_emu_status() {
-				return static_cast<uint8_t>(panel_emu_status);
 			}
 
 			int8_t queue_command(Command command, uint16_t delay) {

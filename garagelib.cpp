@@ -686,6 +686,7 @@ namespace SecPlus1 {
 			int8_t toggle_lock() { return request_action(0x34,0x35); }
 			int8_t toggle_light() { return request_action(0x32,0x33); }
 			int8_t toggle_door() { return request_action(0x30,0x31); }
+			void set_panel_emulation_disabled(bool disabled) { panel_emulation_disabled = disabled; }
 
 			void loop() {
 				if (!running || !SecPlusCommon::sw_serial) return;
@@ -790,7 +791,7 @@ namespace SecPlus1 {
 				this->state = {}; // clear all fields
 				this->state.door_state = SecPlusCommon::DoorStatus::UNKNOWN;
 				this->current_command = 0;
-				this->panel_emu_status = PanelEmuStatus::DETECTING;
+				this->panel_emu_status = panel_emulation_disabled ? PanelEmuStatus::INACTIVE : PanelEmuStatus::DETECTING;
 				this->panel_detection_start = millis();
 			}
 
@@ -817,6 +818,11 @@ namespace SecPlus1 {
 						}
 					}
 					yield();
+				}
+				if (panel_emulation_disabled) {
+					GARAGELIB_PRINTLN(F("Verification stopped: panel emulation is disabled and no panel responded."));
+					this->state_callback = cb_backup;
+					return false;
 				}
 
 				// --- PHASE 2: Active Probing (5 seconds) ---
@@ -888,6 +894,7 @@ namespace SecPlus1 {
 			const SecPlus1Rx::Gap &diagnostic_gap() const { return receiver.gap; }
 #endif
 			const char *get_panel_description() const {
+				if (panel_emulation_disabled) return "Disabled";
 				if (receiver.panel37) return "0x37 panel unsupported; disconnect smart panel";
 				if (receiver.gap.insufficient(millis())) return "Panel timing insufficient for commands; disconnect smart panel";
 				if (panel_emu_status==PanelEmuStatus::ACTIVE) return "Emulating wall panel";
@@ -962,6 +969,7 @@ namespace SecPlus1 {
 			uint32_t client_id;
 			bool check_collision;
 			PanelEmuStatus panel_emu_status = PanelEmuStatus::DETECTING;
+			bool panel_emulation_disabled = false;
 			uint32_t panel_detection_start = 0;
 
 			state_struct_t state {

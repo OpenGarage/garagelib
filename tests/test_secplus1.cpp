@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdio>
 #include <algorithm>
+#include <string>
 #include "../secplus1_receiver.h"
 #define private public
 #include "../garagelib.cpp"
@@ -139,7 +140,29 @@ static void transaction_tests() {
   test_now+=40; g.loop(); assert(uart->tx.size()==3 && uart->tx.back()==0x31);
   SecPlusCommon::delete_sw_serial();
 }
+static void panel_emulation_setting_tests() {
+  SecPlus1::Garage g(5,15);
+  test_now=1000;
+  g.set_panel_emulation_disabled(true);
+  g.begin();
+  assert(g.get_panel_emu_status()==0);
+  assert(std::string(g.get_panel_description())=="Disabled");
+  test_now=22000; g.loop();
+  assert(g.get_panel_emu_status()==0 && SecPlusCommon::sw_serial->tx.empty());
+  // With a panel present, disabling only emulation must preserve gap-aware actions.
+  learn(g.receiver,22000);
+  test_now=22790;
+  assert(g.toggle_light()==0); g.loop();
+  assert(SecPlusCommon::sw_serial->tx==std::vector<uint8_t>{0x32});
+  g.finish_release();
+  g.set_panel_emulation_disabled(false);
+  g.reset_state();
+  assert(g.get_panel_emu_status()==2);
+  test_now=44001; g.loop();
+  assert(g.get_panel_emu_status()==1);
+  SecPlusCommon::delete_sw_serial();
+}
 int main() {
-  receiver_tests(); gap_tests(); transaction_tests();
+  receiver_tests(); gap_tests(); transaction_tests(); panel_emulation_setting_tests();
   std::puts("Sec+ 1.0: receiver, 11492 timing combinations, wraparound and transaction tests passed");
 }

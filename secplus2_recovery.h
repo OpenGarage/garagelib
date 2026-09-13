@@ -15,6 +15,7 @@ class Session {
   void status(uint32_t now) { status_seen=true; last_status=now; ++sequence; }
   bool fresh(uint32_t now) const { return status_seen && uint32_t(now-last_status)<STATUS_TIMEOUT; }
   bool ready(uint32_t now) const { return phase==Phase::OBSERVED && fresh(now); }
+  uint32_t status_age(uint32_t now) const { return status_seen ? uint32_t(now-last_status) : UINT32_MAX; }
   void tick(uint32_t now) {
     if (phase==Phase::OBSERVED && !fresh(now)) seek(now);
     if (phase==Phase::BACKOFF && uint32_t(now-started)>=wait) seek(now);

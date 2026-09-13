@@ -354,6 +354,9 @@ namespace SecPlus2 {
 			const char *recovery_status() const { return recovery.description(); }
 			bool controls_faulted() const { return control_fault; }
 			uint32_t get_query_failures() const { return query_failures; }
+			uint32_t get_write_failures() const { return write_failures; }
+			uint32_t get_tx_deferrals() const { return tx_deferrals; }
+			uint32_t get_status_age() const { return recovery.status_age(millis()); }
 			uint32_t get_expired_commands() const { return expired_commands; }
 
 			void reset_state() {
@@ -862,6 +865,9 @@ namespace SecPlus1 {
 				return "Detecting wall panel";
 			}
 			uint32_t get_parity_errors() const { return receiver.parity_errors; }
+			uint32_t get_overflows() const { return receiver.overflows; }
+			uint32_t get_door_age() const { return receiver.door.valid ? uint32_t(millis()-receiver.door.confirmed_ms) : UINT32_MAX; }
+			uint32_t get_light_lock_age() const { return receiver.light_lock.valid ? uint32_t(millis()-receiver.light_lock.confirmed_ms) : UINT32_MAX; }
 			uint32_t get_invalid_frames() const { return receiver.invalid_frames; }
 			uint32_t get_tx_deferrals() const { return tx_deferrals; }
 			uint32_t get_expired_commands() const { return expired_commands; }

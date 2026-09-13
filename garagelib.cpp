@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include "secplus1_receiver.h"
+#include "secplus2_recovery.h"
 
 //#define GARAGELIB_DEBUG
 #ifdef GARAGELIB_DEBUG
@@ -203,7 +204,7 @@ namespace SecPlus2 {
 
 			void begin() {
 				if (!client_id) return;
-				started = true;
+				started = true; enabled=true;
 				SecPlusCommon::delete_sw_serial();
 				SecPlusCommon::sw_serial = new SoftwareSerial();
 				// Start Serial with 8 bits no parity 1 stop bit and inverted
@@ -216,11 +217,13 @@ namespace SecPlus2 {
 			}
 
 			int8_t request_status() {
-				return queue_command(Command::GET_STATUS, 0, 0, 100);
+				if (!client_id) return -1;
+				ask_for_status=true; return 0;
 			}
 
 			int8_t request_openings() {
-				return queue_command(Command::GET_OPENINGS, 0, 0, 100);
+				if (!client_id) return -1;
+				ask_for_openings=true; return 0;
 			}
 
 			int8_t set_lock(bool lock_status) {
@@ -257,7 +260,9 @@ namespace SecPlus2 {
 				// First send a pressed then a releaase
 				int8_t err = queue_command(Command::DOOR_ACTION, static_cast<uint8_t>(door_action), data_high+1, 250);
 				if (err < 0) return err;
-				return queue_command(Command::DOOR_ACTION, static_cast<uint8_t>(door_action), data_high, 40);
+				err=queue_command(Command::DOOR_ACTION, static_cast<uint8_t>(door_action), data_high, 40);
+				if (err<0) while (buf.get_size()) buf.pop(); // never leave a press without its release
+				return err;
 			}
 
 			int8_t open_door() {
@@ -277,61 +282,87 @@ namespace SecPlus2 {
 			}
 
 			void loop() {
-				if(!client_id || !SecPlusCommon::sw_serial) return;
-
-				if (!SecPlusCommon::sw_serial->available()) {
-					if (state.door_state == SecPlusCommon::DoorStatus::UNKNOWN && (long)(millis() - next_sync_time) > 0) {
-						request_status();
-						request_openings();
-						next_sync_time = millis() + SYNC_DELAY;
-					}
-
-					if (ask_for_status) {
-						ask_for_status = false;
-						request_status();
-					}
-
-					if (buf.get_size() && (long)(millis() - next_command_time) > 0) {
-						if (!send_data(buf.get_head())) {
-							// No error then pop the head off as the command was successfully sent.
-							process_packet(buf.get_head());
-							next_command_time = millis() + buf.get_delay();
-							buf.pop();
-						} else {
-							GARAGELIB_PRINTLN(F("Command failed to send"));
-							next_command_time = millis() + FAILED_COMMAND_DELAY;
-						}
-					}
-				} else {
-					if (reader.read_byte(SecPlusCommon::sw_serial->read())) {
-						// If the packet is complete
-						uint8_t *packet = reader.get_packet();
-						#ifdef GARAGELIB_DEBUG
-						uint32_t r = 0;
-						uint64_t i = 0;
-						uint16_t c = 0;
-						uint32_t p = 0;
-						decode_wireline_command(packet, &r, &i, &c, &p);
-						GARAGELIB_PRINT_TAG;
-						Serial.print(F("[INCOMING PACKET] Rolling code: "));
-						Serial.print(r);
-						Serial.print(F(" id: "));
-						Serial.print(i, HEX);
-						Serial.print(F(" command: "));
-						Serial.print(c, HEX);
-						Serial.print(F(" payload: "));
-						Serial.print(p, HEX);
-						Serial.println(".");
-						#endif
-						process_packet(packet);
-					}
+				if (!client_id || !enabled || !SecPlusCommon::sw_serial) return;
+				// Bounded RX service even when controls have faulted.
+				for (unsigned n=0;n<64 && SecPlusCommon::sw_serial->available();++n) {
+					const int byte=SecPlusCommon::sw_serial->read();
+					if (byte>=0 && reader.read_byte(uint8_t(byte))) process_packet(reader.get_packet());
 				}
+				const uint32_t now=millis();
+				const auto previous_phase=recovery.phase;
+				recovery.tick(now);
+				if (recovery.phase!=previous_phase) query_cached=false;
+				if (!recovery.fresh(now) && state.door_state!=SecPlusCommon::DoorStatus::UNKNOWN) {
+					state.door_state=SecPlusCommon::DoorStatus::UNKNOWN; update_callback();
+				}
+				if (ask_for_status) { recovery.request_status(now); ask_for_status=false; }
+				if (buf.get_size() && !release_pending &&
+				    (!recovery.ready(now) || uint32_t(now-queued_ms)>=2000)) {
+					while (buf.get_size()) buf.pop(); ++expired_commands;
+				}
+				if (SecPlusCommon::sw_serial->available() && !(release_pending && uint32_t(now-pressed_ms)>=1000)) return;
+				if ((int32_t)(now-next_command_time)<0) return;
+				if (buf.get_size()) {
+					uint32_t rc,data; uint64_t fixed;
+					if (decode_wireline(buf.get_head(),&rc,&fixed,&data)<0) {
+						control_fault=true; buf.pop(); return;
+					}
+					const auto cmd=static_cast<Command>(((fixed>>24)&0xf00)|(data&0xff));
+					const bool door=cmd==Command::DOOR_ACTION;
+					const bool press=door && (data & 0x10000);
+					const bool overdue=release_pending && uint32_t(now-pressed_ms)>=1000;
+					const int8_t result=send_data(buf.get_head(),overdue);
+					if (result==-1) { ++tx_deferrals; next_command_time=now+100; return; }
+					if (result==-2) { control_fault=true; ++write_failures; }
+					// Local optimistic bookkeeping is distinct from received self echoes.
+					if (result==0) process_packet(buf.get_head(),false);
+					next_command_time=now+buf.get_delay(); buf.pop();
+					if (press) { release_pending=true; pressed_ms=now; }
+					else if (door) release_pending=false;
+					return; // no second UART write in this service
+				}
+				if (release_pending) { control_fault=true; return; }
+				const auto due=recovery.due(now);
+				if (due==SecPlus2Recovery::Query::NONE && !(ask_for_openings && recovery.ready(now))) return;
+				if (!query_cached) {
+					const Command cmd=due==SecPlus2Recovery::Query::OPENINGS || due==SecPlus2Recovery::Query::NONE ?
+					    Command::GET_OPENINGS : Command::GET_STATUS;
+					query_is_extra=due==SecPlus2Recovery::Query::NONE;
+					if (encode_data(static_cast<uint16_t>(cmd),0,0,query_packet)<0) {
+						++query_failures; recovery.sent(now,false); return;
+					}
+					query_cached=true;
+				}
+				const int8_t result=send_data(query_packet);
+				if (result==-1) { ++tx_deferrals; next_command_time=now+100; return; }
+				query_cached=false; next_command_time=now+100;
+				if (result) ++query_failures;
+				if (!query_is_extra || result) recovery.sent(now,result==0);
+				if (query_is_extra) ask_for_openings=false;
 			}
 
+			void finish_release() {
+				if (release_pending && buf.get_size() && enabled) {
+					if (send_data(buf.get_head(),true)!=0) control_fault=true;
+					buf.pop();
+				}
+				release_pending=false;
+				while (buf.get_size()) buf.pop(); // never replay unsent actions after teardown
+			}
+			void stop() { finish_release(); enabled=false; }
+			bool status_valid() const { return recovery.fresh(millis()); }
+			const char *recovery_status() const { return recovery.description(); }
+			bool controls_faulted() const { return control_fault; }
+			uint32_t get_query_failures() const { return query_failures; }
+			uint32_t get_expired_commands() const { return expired_commands; }
+
 			void reset_state() {
-				this->state = {}; // clear all fields
+				finish_release();
+				this->state = {};
 				this->state.door_state = SecPlusCommon::DoorStatus::UNKNOWN;
-				this->next_sync_time = 0;
+				recovery.start(millis());
+				query_cached=false; control_fault=false;
+				next_command_time=0; reader=SecPlusReader();
 			}
 
 			bool detect() {
@@ -395,7 +426,12 @@ namespace SecPlus2 {
 			// Rolling code can just start at 0 since it will end up resycing while it tries to update it's state at the start.
 			uint32_t rolling_code = 0;
 			bool check_collision;
-			bool ask_for_status = false;
+			bool ask_for_status = false, ask_for_openings=false;
+			bool enabled=false, control_fault=false, release_pending=false;
+			bool query_cached=false, query_is_extra=false;
+			uint8_t query_packet[SEC2_PACKET_SIZE]{};
+			uint32_t queued_ms=0, pressed_ms=0, query_failures=0, write_failures=0, tx_deferrals=0, expired_commands=0;
+			SecPlus2Recovery::Session recovery;
 
 			state_struct_t state {
 				door_state: SecPlusCommon::DoorStatus::UNKNOWN,
@@ -414,8 +450,7 @@ namespace SecPlus2 {
 			SecPlusReader reader;
 			NEW_COMMAND_BUFFER(internal_buffer, SEC2_PACKET_SIZE, COMMAND_BUFFER_CAPACITY);
 			SecPlusCommon::CommandBuffer buf = SecPlusCommon::CommandBuffer(SEC2_PACKET_SIZE, COMMAND_BUFFER_CAPACITY, internal_buffer);
-			uint32_t next_command_time;
-			uint32_t next_sync_time;
+			uint32_t next_command_time=0;
 
 			state_callback_t state_callback = NULL;
 
@@ -426,6 +461,10 @@ namespace SecPlus2 {
 
 			int8_t queue_command(Command command, uint8_t data_low, uint16_t data_high, uint16_t delay) {
 				if (!client_id) return -1;
+				const bool release=command==Command::DOOR_ACTION && !(data_high & 1);
+				if (!enabled || control_fault || !recovery.ready(millis()) || query_cached ||
+				    (buf.get_size() && !release)) return -1;
+				if (!buf.get_size()) queued_ms=millis();
 				uint8_t *packet = buf.push_next();
 				if (packet) {
 					*packet = delay >> 8;
@@ -436,7 +475,7 @@ namespace SecPlus2 {
 				}
 			}
 
-			int8_t send_data(uint8_t *packet) {
+			int8_t send_data(uint8_t *packet, bool force=false) {
 				if(!SecPlusCommon::sw_serial) return -1;
 				// Use mosfet to pull bus low (open drain) to take control of bus
 				digitalWrite(tx_pin, HIGH);
@@ -445,7 +484,7 @@ namespace SecPlus2 {
 				delayMicroseconds(130);
 
 				// Check if there is a bus collision
-				if (check_collision && digitalRead(rx_pin)) return -1;
+				if (!force && check_collision && digitalRead(rx_pin)) return -1;
 
 
 				#ifdef GARAGELIB_DEBUG
@@ -473,10 +512,10 @@ namespace SecPlus2 {
 				Serial.println("]");
 				#endif
 
-				SecPlusCommon::sw_serial->write(packet, SEC2_PACKET_SIZE);
+				const bool complete=SecPlusCommon::sw_serial->write(packet, SEC2_PACKET_SIZE)==SEC2_PACKET_SIZE;
 				delayMicroseconds(100);
 
-				return 0;
+				return complete ? 0 : -2;
 			}
 
 			int8_t encode_data(uint16_t command, uint8_t data_low, uint16_t data_high, uint8_t* packet) {
@@ -488,17 +527,20 @@ namespace SecPlus2 {
 				return res;
 			}
 
-			int8_t process_packet(uint8_t* packet) {
+			int8_t process_packet(uint8_t* packet, bool from_bus=true) {
 				uint32_t rolling;
 				uint64_t fixed;
 				uint32_t data;
 				int8_t err = decode_wireline(packet, &rolling, &fixed, &data);
 				if (err < 0) return err;
+				if (from_bus && uint32_t(fixed)==client_id) return 0;
 
 				Command command = static_cast<Command>(((fixed >> 24) & 0xf00) | (data & 0xff));
 
 				switch (command) {
 					case Command::STATUS:
+						if (((data>>8)&15)<1 || ((data>>8)&15)>5) return -1;
+						if (from_bus) recovery.status(millis());
 						state.door_state = static_cast<SecPlusCommon::DoorStatus>((data >> 8) & 0xF);
 						state.obstruction_state = !((data >> 22) & 0x1); // invert the logic as this seems to be active low
 						state.lock_state = (data >> 24) & 0x1;

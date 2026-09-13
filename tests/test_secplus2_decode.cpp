@@ -26,12 +26,11 @@ int main() {
   assert(!disabled.set_client_id(0));
   assert(disabled.set_client_id(0x12342908));
   assert(disabled.request_status() == 0);
-  assert(!disabled.set_client_id(0x56782908)); // queued frame already owns its identity
+  disabled.begin(); disabled.reset_state(); disabled.loop();
   uint32_t rolling, data;
   uint64_t fixed;
-  assert(decode_wireline(disabled.buf.get_head(), &rolling, &fixed, &data) == 0);
+  assert(decode_wireline(SecPlusCommon::sw_serial->tx.data(), &rolling, &fixed, &data) == 0);
   assert(uint32_t(fixed) == 0x12342908);
-  disabled.begin();
   assert(!disabled.set_client_id(0x56782908));
   SecPlusCommon::delete_sw_serial();
   unsigned checks = 0;

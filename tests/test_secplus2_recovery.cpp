@@ -60,7 +60,9 @@ static void integrated() {
   // Uncertain press delivery still releases; controls fault, status queries continue.
   assert(g.open_door()==0); uart->short_write=true; g.loop();
   assert(g.release_pending && g.control_fault && g.buf.get_size()==1);
+  assert(g.command_pending()); // ID rotation must not interrupt release cleanup
   uart->short_write=false; test_now=3450; g.loop(); assert(!g.release_pending && g.buf.get_size()==0);
+  assert(!g.command_pending());
   assert(g.close_door()<0);
   size_t count=uart->tx.size(); test_now=11100; g.loop(); assert(uart->tx.size()==count+19);
   // Opener remains absent >90 s while OG keeps its counter and does bounded retries.
@@ -74,6 +76,7 @@ static void integrated() {
   status(g); g.loop(); assert(!g.recovery.ready(test_now)); // unsolicited frame cannot bypass paced retry
   test_now=111100; g.loop(); test_now=111200; g.loop(); status(g); g.loop();
   assert(g.recovery.ready(test_now)); assert(g.toggle_light()==0);
+  assert(g.command_pending()); // queued, even before a write reaches the bus
   test_now+=100; g.loop();
   // A failed query heals through the same retry path, not a reboot-only latch.
   test_now+=10000; uart->short_write=true; g.loop();

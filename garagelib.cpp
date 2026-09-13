@@ -353,6 +353,7 @@ namespace SecPlus2 {
 			bool status_valid() const { return recovery.fresh(millis()); }
 			const char *recovery_status() const { return recovery.description(); }
 			bool controls_faulted() const { return control_fault; }
+			bool command_pending() { return release_pending || buf.get_size() != 0; }
 			uint32_t get_query_failures() const { return query_failures; }
 			uint32_t get_write_failures() const { return write_failures; }
 			uint32_t get_tx_deferrals() const { return tx_deferrals; }

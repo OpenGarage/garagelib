@@ -2,6 +2,7 @@
 #include <secplus.h>
 #include <Arduino.h>
 #include <SoftwareSerial.h>
+#include "secplus1_receiver.h"
 
 //#define GARAGELIB_DEBUG
 #ifdef GARAGELIB_DEBUG
@@ -193,7 +194,16 @@ namespace SecPlus2 {
 				this->reader = SecPlusReader();
 			}
 
+			// Identity may only change before this instance has started using the bus.
+			bool set_client_id(uint32_t id) {
+				if (started || buf.get_size() || !id) return false;
+				client_id = id;
+				return true;
+			}
+
 			void begin() {
+				if (!client_id) return;
+				started = true;
 				SecPlusCommon::delete_sw_serial();
 				SecPlusCommon::sw_serial = new SoftwareSerial();
 				// Start Serial with 8 bits no parity 1 stop bit and inverted
@@ -267,7 +277,7 @@ namespace SecPlus2 {
 			}
 
 			void loop() {
-				if(!SecPlusCommon::sw_serial) return;
+				if(!client_id || !SecPlusCommon::sw_serial) return;
 
 				if (!SecPlusCommon::sw_serial->available()) {
 					if (state.door_state == SecPlusCommon::DoorStatus::UNKNOWN && (long)(millis() - next_sync_time) > 0) {
@@ -325,6 +335,7 @@ namespace SecPlus2 {
 			}
 
 			bool detect() {
+				if (!client_id) return false;
 				this->begin();
 				state_callback_t cb_backup = this->state_callback;
 				this->state_callback = NULL; // temporarily disable callback since we are only doing detection
@@ -380,6 +391,7 @@ namespace SecPlus2 {
 
 		private:
 			uint32_t client_id;
+			bool started = false;
 			// Rolling code can just start at 0 since it will end up resycing while it tries to update it's state at the start.
 			uint32_t rolling_code = 0;
 			bool check_collision;
@@ -413,6 +425,7 @@ namespace SecPlus2 {
 			}
 
 			int8_t queue_command(Command command, uint8_t data_low, uint16_t data_high, uint16_t delay) {
+				if (!client_id) return -1;
 				uint8_t *packet = buf.push_next();
 				if (packet) {
 					*packet = delay >> 8;
@@ -496,8 +509,10 @@ namespace SecPlus2 {
 						switch ((data >> 8) & 0b11) {
 							case 0b00:
 								state.lock_state = false;
+								break;
 							case 0b01:
 								state.lock_state = true;
+								break;
 							case 0b10:
 								state.lock_state = !state.lock_state;
 								break;
@@ -511,8 +526,10 @@ namespace SecPlus2 {
 						switch ((data >> 8) & 0b11) {
 							case 0b00:
 								state.light_state = false;
+								break;
 							case 0b01:
 								state.light_state = true;
+								break;
 							case 0b10:
 								state.light_state = !state.light_state;
 								break;
@@ -577,6 +594,7 @@ namespace SecPlus1 {
 		bool light_state;
 		bool lock_state;
 		bool obstruction_state;
+		bool door_valid=false, light_lock_valid=false, obstruction_valid=false;
 	} state_struct_t;
 
 	typedef void (*state_callback_t)(state_struct_t state);
@@ -592,11 +610,13 @@ namespace SecPlus1 {
 			}
 
 			void begin() {
+				stop();
 				SecPlusCommon::delete_sw_serial();
 				SecPlusCommon::sw_serial = new SoftwareSerial();
 				// Start Serial with 8 bits even parity parity 1 stop bit and inverted
 				SecPlusCommon::sw_serial->begin(1200, SWSERIAL_8E1, rx_pin, tx_pin, true);
-				this->panel_detection_start = millis();
+				running=true;
+				this->reset_state();
 			}
 
 			void enable_callback(state_callback_t callback) {
@@ -615,73 +635,90 @@ namespace SecPlus1 {
 				return queue_command(Command::LIGHT_LOCK_STATUS, 100);
 			}
 
-			int8_t toggle_lock() {
-				queue_command(Command::LOCK_BUTTON_PRESS, 250);
-				queue_command(Command::LOCK_BUTTON_RELEASE, 40);
-				return queue_command(Command::LOCK_BUTTON_RELEASE, 40);
-			}
-
-			int8_t toggle_light() {
-				queue_command(Command::LIGHT_BUTTON_PRESS, 250);
-				queue_command(Command::LIGHT_BUTTON_RELEASE, 40);
-				return queue_command(Command::LIGHT_BUTTON_RELEASE, 40);
-			}
-
-			int8_t toggle_door() {
-				queue_command(Command::DOOR_BUTTON_PRESS, 250);
-				queue_command(Command::DOOR_BUTTON_RELEASE, 40);
-				return queue_command(Command::DOOR_BUTTON_RELEASE, 40);
-			}
+			int8_t toggle_lock() { return request_action(0x34,0x35); }
+			int8_t toggle_light() { return request_action(0x32,0x33); }
+			int8_t toggle_door() { return request_action(0x30,0x31); }
 
 			void loop() {
-				if(!SecPlusCommon::sw_serial) return;
-
-				if (!SecPlusCommon::sw_serial->available()) {
-					switch (this->panel_emu_status) {
-						case PanelEmuStatus::DETECTING:
-							// Check for success: Did process_packet() update our door state?
-							if (state.door_state != SecPlusCommon::DoorStatus::UNKNOWN) {
-								GARAGELIB_PRINTLN(F("Existing wall panel detected. Panel Emu will remain inactive."));
-								panel_emu_status = PanelEmuStatus::INACTIVE;
-								emulation_command_index = 0;
-							}
-							// Check for timeout: 20 seconds have passed without finding a panel
-							else if ((long)(millis() - panel_detection_start) > 20000) {
-								GARAGELIB_PRINTLN(F("No wall panel detected after 20s. Starting active emulation."));
-								panel_emu_status = PanelEmuStatus::ACTIVE; // Transition to Active (Emulating)
-								emulation_command_index = 0;
-							}
-							break;
-
-						case PanelEmuStatus::ACTIVE:
-							// This is the active wall panel emulation from ratgdo/gdo.c
-							if ((long)(millis() - next_sync_time) > 0) {
-								uint8_t command_to_send = wall_panel_commands[emulation_command_index];
-								send_data(&command_to_send);
-								emulation_command_index++;
-								if (emulation_command_index == 18) {
-									emulation_command_index = 15;
-								}
-								next_sync_time = millis() + 250;
-							}
-							break;
-
-						default:
-							// Do nothing
-							break;
+				if (!running || !SecPlusCommon::sw_serial) return;
+				pump();
+				const uint32_t now=millis();
+				receiver.tick(now);
+				publish_receiver();
+				const bool backlog=SecPlusCommon::sw_serial->available()>0;
+				if (releases_left) {
+					// Once possibly pressed, never wait indefinitely for a quiet bus.
+					const bool overdue=uint32_t(now-pressed_ms)>=1000;
+					if (uint32_t(now-last_action_ms)>=40 && (!backlog || overdue)) {
+						if (!send_data(&release_byte)) control_fault=true;
+						--releases_left; last_action_ms=now;
+						if (!releases_left) action_result=control_fault ? "Delivery uncertain; reboot required" : "Transmitted (not acknowledged)";
 					}
-
-					if (buf.get_size() && (long)(millis() - next_command_time) > 0) {
-						send_data(buf.get_head());
-						buf.pop();
-						next_command_time = millis() + buf.get_delay();
+					return;
+				}
+				if (panel_emu_status==PanelEmuStatus::DETECTING) {
+					if (receiver.observed) panel_emu_status=PanelEmuStatus::INACTIVE;
+					else if (uint32_t(now-panel_detection_start)>20000) panel_emu_status=PanelEmuStatus::ACTIVE;
+				}
+				if (pending_press) {
+					if (uint32_t(now-request_ms)>=2000) {
+						pending_press=0; ++expired_commands;
+						action_result="Bus wait expired; no command";
+						return;
 					}
-				} else {
-					process_packet(SecPlusCommon::sw_serial->read());
+					if (panel_emu_status==PanelEmuStatus::DETECTING || receiver.panel37 || control_fault ||
+					    backlog || !command_idle(now)) { ++tx_deferrals; return; }
+					const uint8_t press=pending_press; pending_press=0;
+					// A short write may have delivered a press: never replay it.
+					releases_left=2; pressed_ms=last_action_ms=now;
+					receiver.gap.reset();
+					if (!send_data(&press)) control_fault=true;
+					action_result=control_fault ? "Delivery uncertain; releasing" : "Press transmitted; releasing";
+					return;
+				}
+				if (backlog || receiver.panel37 || !quiet(now,50)) return;
+				// Querying may continue after a control fault; no new actions may start.
+				if (buf.get_size()) {
+					const uint16_t wait=buf.get_delay();
+					if ((int32_t)(now-next_command_time)>=0) {
+						send_data(buf.get_head()); buf.pop();
+						next_command_time=now+wait;
+					}
+					return;
+				}
+				if (panel_emu_status==PanelEmuStatus::ACTIVE && (int32_t)(now-next_sync_time)>=0) {
+					uint8_t command=wall_panel_commands[emulation_command_index];
+					send_data(&command);
+					if (++emulation_command_index==18) emulation_command_index=15;
 				}
 			}
 
+			void finish_release() {
+				// Lifecycle teardown has no future loop in which to finish the tail.
+				while (releases_left && SecPlusCommon::sw_serial) {
+					if (!send_data(&release_byte)) control_fault=true;
+					--releases_left;
+					action_result=control_fault ? "Delivery uncertain; reboot required" : "Transmitted (not acknowledged)";
+				}
+				if (pending_press) action_result="Canceled for maintenance; no command";
+				pending_press=0;
+			}
+
+			void stop() {
+				finish_release();
+				running=false;
+				receiver.loss();
+				publish_receiver();
+			}
+
 			void reset_state() {
+				const bool was_running=running;
+				stop();
+				running=was_running;
+				receiver=SecPlus1Rx::Receiver{};
+				while (buf.get_size()) buf.pop();
+				emulation_command_index=0; next_sync_time=next_command_time=0;
+				control_fault=false; action_result="Idle";
 				this->state = {}; // clear all fields
 				this->state.door_state = SecPlusCommon::DoorStatus::UNKNOWN;
 				this->current_command = 0;
@@ -700,8 +737,9 @@ namespace SecPlus1 {
 				GARAGELIB_PRINTLN(F("Verifying Sec+ 1.0 -- Phase 1: Passively listening for existing panel..."));
 				unsigned long phase1_startTime = millis();
 				while (millis() - phase1_startTime < 2500) {
+					receiver.tick(millis());
 					if (SecPlusCommon::sw_serial->available()) {
-						process_packet(SecPlusCommon::sw_serial->read());
+						read_byte();
 						// Check if we received and decoded a valid status packet
 						if (this->state.door_state != SecPlusCommon::DoorStatus::UNKNOWN) {
 							GARAGELIB_PRINTLN(F("Verification PASSED (Passive): Existing Sec+ 1.0 panel detected."));
@@ -721,8 +759,9 @@ namespace SecPlus1 {
 				uint8_t emulation_command_index = 0;
 
 				while (millis() - phase2_startTime < 5000) {
+					receiver.tick(millis());
 					if (SecPlusCommon::sw_serial->available()) {
-						process_packet(SecPlusCommon::sw_serial->read());
+						read_byte();
 						if (this->state.door_state != SecPlusCommon::DoorStatus::UNKNOWN) {
 							GARAGELIB_PRINTLN(F("Verification PASSED (Active): Opener responded to probe."));
 							//SecPlusCommon::sw_serial->end(); // Release the serial port
@@ -730,7 +769,7 @@ namespace SecPlus1 {
 							return true;
 						}
 					} else { // Emulation Sender: Send a command every 250ms
-						if (millis() - last_emulation_time >= 250) {
+						if (millis() - last_emulation_time >= 250 && quiet(millis(),50)) {
 							last_emulation_time = millis();
 							uint8_t command_to_send = wall_panel_commands[emulation_command_index];
 							send_data(&command_to_send);
@@ -769,7 +808,79 @@ namespace SecPlus1 {
 				return static_cast<uint8_t>(panel_emu_status);
 			}
 
+			bool door_valid() const { return receiver.door.valid; }
+			bool light_lock_valid() const { return receiver.light_lock.valid; }
+			bool obstruction_valid() const { return receiver.obstruction_valid; }
+			const char *get_action_result() const { return action_result; }
+			const char *get_panel_description() const {
+				if (receiver.panel37) return "0x37 panel unsupported; disconnect smart panel";
+				if (receiver.gap.insufficient(millis())) return "Panel timing insufficient for commands; disconnect smart panel";
+				if (panel_emu_status==PanelEmuStatus::ACTIVE) return "Emulating wall panel";
+				if (panel_emu_status==PanelEmuStatus::INACTIVE) return "Existing wall panel";
+				return "Detecting wall panel";
+			}
+			uint32_t get_parity_errors() const { return receiver.parity_errors; }
+			uint32_t get_invalid_frames() const { return receiver.invalid_frames; }
+			uint32_t get_tx_deferrals() const { return tx_deferrals; }
+			uint32_t get_expired_commands() const { return expired_commands; }
+
 		private:
+			SecPlus1Rx::Receiver receiver;
+			uint8_t pending_press=0, release_byte=0, releases_left=0;
+			uint32_t request_ms=0, pressed_ms=0, last_action_ms=0, last_tx_ms=0;
+			uint32_t tx_deferrals=0, expired_commands=0;
+			bool control_fault=false, tx_seen=false, running=false;
+			const char *action_result="Idle";
+
+			bool quiet(uint32_t now, uint32_t idle) const {
+				return !receiver.request && uint32_t(now-receiver.last_byte)>=idle &&
+				       (!tx_seen || uint32_t(now-last_tx_ms)>=50) && !digitalRead(rx_pin);
+			}
+			bool command_idle(uint32_t now) const {
+				if (panel_emu_status==PanelEmuStatus::INACTIVE)
+					return quiet(now,10) && receiver.gap.ready(now);
+				return quiet(now,50);
+			}
+			int8_t request_action(uint8_t press, uint8_t release) {
+				if (pending_press || releases_left) return -1; // preserve active request's result
+				if (control_fault) { action_result="Delivery uncertain; reboot required"; return -1; }
+				if (receiver.panel37) { action_result="Unsupported panel; no command"; return -1; }
+				if (!running || !SecPlusCommon::sw_serial) { action_result="Transport unavailable; no command"; return -1; }
+				pending_press=press; release_byte=release; request_ms=millis();
+				action_result="Waiting for bus"; return 0;
+			}
+			void read_byte() {
+				const int byte=SecPlusCommon::sw_serial->read();
+				if (byte<0) return;
+				receiver.feed(uint8_t(byte),SecPlusCommon::sw_serial->readParity(),millis());
+				publish_receiver();
+			}
+			void pump() {
+				if (SecPlusCommon::sw_serial->overflow()) { ++receiver.overflows; receiver.loss(); }
+				for (unsigned n=0;n<32 && SecPlusCommon::sw_serial->available();++n) read_byte();
+			}
+			void publish_receiver() {
+				SecPlusCommon::DoorStatus door=SecPlusCommon::DoorStatus::UNKNOWN;
+				if (receiver.door.valid) {
+					switch (receiver.door.value) {
+						case 0: door=SecPlusCommon::DoorStatus::STOPPED; break;
+						case 1: door=SecPlusCommon::DoorStatus::OPENING; break;
+						case 2: door=SecPlusCommon::DoorStatus::OPEN; break;
+						case 4: door=SecPlusCommon::DoorStatus::CLOSING; break;
+						case 5: door=SecPlusCommon::DoorStatus::CLOSED; break;
+					}
+				}
+				const bool light=receiver.light_lock.valid ? (receiver.light_lock.value & 4)!=0 : state.light_state;
+				const bool lock=receiver.light_lock.valid ? (receiver.light_lock.value & 8)==0 : state.lock_state;
+				const bool obstruction=receiver.obstruction_valid ? receiver.obstruction : state.obstruction_state;
+				const bool changed=door!=state.door_state || light!=state.light_state || lock!=state.lock_state ||
+					obstruction!=state.obstruction_state || receiver.door.valid!=state.door_valid ||
+					receiver.light_lock.valid!=state.light_lock_valid || receiver.obstruction_valid!=state.obstruction_valid;
+				state.door_state=door; state.light_state=light; state.lock_state=lock; state.obstruction_state=obstruction;
+				state.door_valid=receiver.door.valid; state.light_lock_valid=receiver.light_lock.valid;
+				state.obstruction_valid=receiver.obstruction_valid;
+				if (changed) update_callback();
+			}
 			uint32_t client_id;
 			bool check_collision;
 			PanelEmuStatus panel_emu_status = PanelEmuStatus::DETECTING;
@@ -789,8 +900,8 @@ namespace SecPlus1 {
 
 			NEW_COMMAND_BUFFER(internal_buffer, 1, COMMAND_BUFFER_CAPACITY);
 			SecPlusCommon::CommandBuffer buf = SecPlusCommon::CommandBuffer(1, COMMAND_BUFFER_CAPACITY, internal_buffer);
-			uint32_t next_command_time;
-			uint32_t next_sync_time;
+			uint32_t next_command_time=0;
+			uint32_t next_sync_time=0;
 			uint8_t emulation_command_index = 0;
 			state_callback_t state_callback = NULL;
 
@@ -811,99 +922,12 @@ namespace SecPlus1 {
 				}
 			}
 
-			void send_data(uint8_t *packet) {
-				if(!SecPlusCommon::sw_serial) return;
-				#ifdef GARAGELIB_DEBUG
-				GARAGELIB_PRINT_TAG;
-				Serial.print(F("[OUTGOING PACKET] Command: "));
-				Serial.print(*packet);
-				Serial.println(".");
-				#endif
-
-				SecPlusCommon::sw_serial->write(packet, 1);
+			bool send_data(const uint8_t *packet) {
+				if (!SecPlusCommon::sw_serial) return false;
+				const bool ok=SecPlusCommon::sw_serial->write(packet,1)==1;
+				last_tx_ms=millis(); tx_seen=true; next_sync_time=last_tx_ms+250;
 				delayMicroseconds(100);
-			}
-
-			int8_t process_packet(uint8_t packet) {
-				if (!current_command) {
-					Command command = static_cast<Command>(packet);
-					switch (command) {
-						case Command::DOOR_STATUS:
-						case Command::OBSTRUCTION_STATUS:
-						case Command::LIGHT_LOCK_STATUS:
-							// Requires second byte
-							current_command = packet;
-							break;
-						default:
-							// Only handle the status commands for now
-							#ifdef GARAGELIB_DEBUG
-							GARAGELIB_PRINT_TAG;
-							Serial.print(F("[INCOMING PACKET] Command: "));
-							Serial.print(packet, HEX);
-							Serial.println(".");
-							#endif
-							break;
-					}
-				} else {
-					#ifdef GARAGELIB_DEBUG
-					GARAGELIB_PRINT_TAG;
-					Serial.print(F("[INCOMING PACKET] Command: "));
-					Serial.print(current_command, HEX);
-					Serial.print(F(" data: "));
-					Serial.print(packet, HEX);
-					Serial.println(".");
-					#endif
-					Command command = static_cast<Command>(current_command);
-					switch (command) {
-						case Command::DOOR_STATUS: {
-							uint8_t val = packet & 0x7;
-							switch (val) {
-								case 0x00:
-								case 0x06:
-									state.door_state = SecPlusCommon::DoorStatus::STOPPED;
-									break;
-								case 0x01:
-									state.door_state = SecPlusCommon::DoorStatus::OPENING;
-									break;
-								case 0x02:
-									state.door_state = SecPlusCommon::DoorStatus::OPEN;
-									break;
-								// No 0x03
-								case 0x04:
-									state.door_state = SecPlusCommon::DoorStatus::CLOSING;
-									break;
-								case 0x05:
-									state.door_state = SecPlusCommon::DoorStatus::CLOSED;
-									break;
-								default:
-									state.door_state = SecPlusCommon::DoorStatus::UNKNOWN;
-							}
-							update_callback();
-							break;
-						}
-						case Command::OBSTRUCTION_STATUS:
-							state.obstruction_state = packet != 0;
-							update_callback();
-							break;
-						case Command::LIGHT_LOCK_STATUS:
-							// upper nibble must be 5
-							if ((packet & 0xF0) != 0x50) {
-								break;
-							}
-
-							// Light state in bit 2
-							state.light_state = (packet >> 2) & 1;
-							// Light state in bit 3, but inverted
-							state.lock_state = (~packet >> 3) & 1;
-							update_callback();
-							break;
-						default:
-							// Unreachable
-							break;
-					}
-					current_command = 0;
-				}
-				return 0;
+				return ok;
 			}
 	};
 }

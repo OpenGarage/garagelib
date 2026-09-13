@@ -305,7 +305,9 @@ namespace SecPlus2 {
 				if (buf.get_size()) {
 					uint32_t rc,data; uint64_t fixed;
 					if (decode_wireline(buf.get_head(),&rc,&fixed,&data)<0) {
-						control_fault=true; buf.pop(); return;
+						// A corrupt queued release cannot be sent or retried. Keep controls
+						// faulted, but do not leave release_pending blocking status queries.
+						control_fault=true; release_pending=false; buf.pop(); return;
 					}
 					const auto cmd=static_cast<Command>(((fixed>>24)&0xf00)|(data&0xff));
 					const bool door=cmd==Command::DOOR_ACTION;
@@ -692,6 +694,10 @@ namespace SecPlus1 {
 				receiver.tick(now);
 				publish_receiver();
 				const bool backlog=SecPlusCommon::sw_serial->available()>0;
+#ifdef OG_SEC1_DIAGNOSTICS
+				++diagnostic.loops;
+				if (receiver.gap.ready(now)) ++diagnostic.gap_ready_loops;
+#endif
 				if (releases_left) {
 					// Once possibly pressed, never wait indefinitely for a quiet bus.
 					const bool overdue=uint32_t(now-pressed_ms)>=1000;
@@ -713,7 +719,23 @@ namespace SecPlus1 {
 						return;
 					}
 					if (panel_emu_status==PanelEmuStatus::DETECTING || receiver.panel37 || control_fault ||
-					    backlog || !command_idle(now)) { ++tx_deferrals; return; }
+					    backlog || !command_idle(now)) {
+#ifdef OG_SEC1_DIAGNOSTICS
+						uint16_t mask=0;
+						if (panel_emu_status==PanelEmuStatus::DETECTING) mask|=1;
+						if (receiver.panel37) mask|=2;
+						if (control_fault) mask|=4;
+						if (backlog) mask|=8;
+						if (receiver.request) mask|=16;
+						if (uint32_t(now-receiver.last_byte)<(panel_emu_status==PanelEmuStatus::INACTIVE?10U:50U)) mask|=32;
+						if (tx_seen && uint32_t(now-last_tx_ms)<50) mask|=64;
+						if (digitalRead(rx_pin)) mask|=128;
+						if (panel_emu_status==PanelEmuStatus::INACTIVE && !receiver.gap.ready(now)) mask|=256;
+						diagnostic.last_block=mask;
+						for (unsigned i=0;i<9;++i) if(mask & (1U<<i)) ++diagnostic.blocked[i];
+#endif
+						++tx_deferrals; return;
+					}
 					const uint8_t press=pending_press; pending_press=0;
 					// A short write may have delivered a press: never replay it.
 					releases_left=2; pressed_ms=last_action_ms=now;
@@ -858,6 +880,13 @@ namespace SecPlus1 {
 			bool light_lock_valid() const { return receiver.light_lock.valid; }
 			bool obstruction_valid() const { return receiver.obstruction_valid; }
 			const char *get_action_result() const { return action_result; }
+#ifdef OG_SEC1_DIAGNOSTICS
+			struct Diagnostic {
+				uint32_t loops=0, gap_ready_loops=0, blocked[9]{};
+				uint16_t last_block=0;
+			} diagnostic;
+			const SecPlus1Rx::Gap &diagnostic_gap() const { return receiver.gap; }
+#endif
 			const char *get_panel_description() const {
 				if (receiver.panel37) return "0x37 panel unsupported; disconnect smart panel";
 				if (receiver.gap.insufficient(millis())) return "Panel timing insufficient for commands; disconnect smart panel";

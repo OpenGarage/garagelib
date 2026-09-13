@@ -56,8 +56,23 @@ static void receiver_tests() {
   assert(!e.request && !e.gap.ready(1900));
 }
 static void gap_tests() {
+  for (uint32_t latency=0;latency<9;++latency) {
+    SecPlus1Rx::Receiver r; learn(r,1000,250,latency);
+    assert(!r.gap.ready(1800));
+  }
+  // Mixed 9/10 ms observations must retain the same 250 ms panel cadence.
+  SecPlus1Rx::Receiver mixed;
+  for(unsigned i=0;i<4;++i) {
+    const uint32_t q=1000+i*250;
+    mixed.feed(0x38,SecPlus1Rx::parity(0x38),q);
+    mixed.feed(5,SecPlus1Rx::parity(5),q+9+(i%2));
+  }
+  assert(!mixed.gap.ready(1769)); // still wait 10 ms AFTER the reply
+  assert(mixed.gap.ready(1770));
+  mixed.gap.exchange(2000,2061); // upper bound remains unchanged
+  assert(!mixed.gap.ready(2071));
   for (uint32_t interval=180;interval<=400;++interval) {
-    for (uint32_t latency=10;latency<=60;++latency) {
+    for (uint32_t latency=9;latency<=60;++latency) {
       SecPlus1Rx::Receiver r; learn(r,1000,interval,latency);
       const uint32_t reply=1000+3*interval+latency;
       assert(r.gap.insufficient(reply)==(interval<170+latency));
@@ -126,5 +141,5 @@ static void transaction_tests() {
 }
 int main() {
   receiver_tests(); gap_tests(); transaction_tests();
-  std::puts("Sec+ 1.0: receiver, 11271 timing combinations, wraparound and transaction tests passed");
+  std::puts("Sec+ 1.0: receiver, 11492 timing combinations, wraparound and transaction tests passed");
 }

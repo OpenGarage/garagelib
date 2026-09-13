@@ -6,9 +6,41 @@
 namespace SecPlus1Rx {
 class Gap {
  public:
-  void reset() { seen = false; count = 0; }
+  // 1200 baud / 8E1 is about 9.17 ms per byte. Dequeue timestamps in
+  // milliseconds can measure a valid adjacent query/reply as 9 or 10 ms.
+  // This learning floor is separate from the unchanged 10 ms post-reply guard.
+  static constexpr uint32_t MIN_REPLY_MS = 9;
+#ifdef OG_SEC1_DIAGNOSTICS
+  struct Diagnostic {
+    uint32_t exchanges=0, resets=0, bad_latency=0, zero_latency=0, bad_interval=0;
+    uint32_t latency=0, interval=0, previous_query=0;
+    uint8_t max_count=0;
+    bool have_query=false;
+  } diagnostic;
+  uint8_t learned_count() const { return count; }
+  uint32_t learned_minimum() const { return minimum; }
+  uint32_t learned_maximum() const { return maximum; }
+  uint32_t reply_age(uint32_t now) const { return seen ? uint32_t(now-reply) : UINT32_MAX; }
+#endif
+  void reset() {
+#ifdef OG_SEC1_DIAGNOSTICS
+    ++diagnostic.resets;
+#endif
+    seen = false; count = 0;
+  }
   void exchange(uint32_t q, uint32_t r) {
-    if (uint32_t(r-q) < 10 || uint32_t(r-q) > 60) { reset(); return; }
+#ifdef OG_SEC1_DIAGNOSTICS
+    ++diagnostic.exchanges;
+    diagnostic.latency=uint32_t(r-q);
+    if (diagnostic.latency<MIN_REPLY_MS || diagnostic.latency>60) ++diagnostic.bad_latency;
+    if (!diagnostic.latency) ++diagnostic.zero_latency;
+    if (diagnostic.have_query) {
+      diagnostic.interval=uint32_t(q-diagnostic.previous_query);
+      if(diagnostic.interval<180 || diagnostic.interval>400) ++diagnostic.bad_interval;
+    }
+    diagnostic.previous_query=q; diagnostic.have_query=true;
+#endif
+    if (uint32_t(r-q) < MIN_REPLY_MS || uint32_t(r-q) > 60) { reset(); return; }
     if (seen) {
       const uint32_t interval = q-query;
       if (interval < 180 || interval > 400 ||
@@ -21,6 +53,9 @@ class Gap {
       }
     }
     seen=true; query=q; reply=r;
+#ifdef OG_SEC1_DIAGNOSTICS
+    diagnostic.max_count=std::max(diagnostic.max_count,count);
+#endif
   }
   bool ready(uint32_t now) const {
     const uint32_t age=now-query, reply_age=now-reply;

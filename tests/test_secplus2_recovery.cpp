@@ -86,4 +86,25 @@ static void integrated() {
   g.stop(); assert(g.toggle_door()<0);
   SecPlusCommon::delete_sw_serial();
 }
-int main() { policy(); integrated(); std::puts("Sec+ 2.0 recovery: policy, outage, collisions, partial writes, self echo and no-replay tests passed"); }
+static void corrupt_release() {
+  SecPlus2::Garage g(0x56782908,5,15);
+  test_now=1000; g.begin(); g.reset_state();
+  auto *uart=SecPlusCommon::sw_serial;
+  g.loop(); test_now=1100; g.loop(); status(g); g.loop();
+  assert(g.open_door()==0);
+  test_now=1200; g.loop();
+  assert(g.release_pending && g.buf.get_size()==1);
+  // Fault injection only: the production encoder does not create this packet.
+  std::fill(g.buf.get_head(),g.buf.get_head()+19,0xff);
+  const size_t sent=uart->tx.size();
+  test_now=1450; g.loop();
+  assert(g.control_fault && !g.release_pending && g.buf.get_size()==0);
+  assert(uart->tx.size()==sent && g.close_door()<0);
+  test_now=11100; g.loop();
+  assert(uart->tx.size()==sent+19); // query service survives; no action replay
+  uint32_t rolling,data; uint64_t fixed;
+  assert(decode_wireline(uart->tx.data()+sent,&rolling,&fixed,&data)==0);
+  assert((((fixed>>24)&0xf00)|(data&0xff))==static_cast<unsigned>(SecPlus2::Command::GET_STATUS));
+  g.stop(); SecPlusCommon::delete_sw_serial();
+}
+int main() { policy(); integrated(); corrupt_release(); std::puts("Sec+ 2.0 recovery: policy, outage, collisions, partial writes, corrupt release, self echo and no-replay tests passed"); }

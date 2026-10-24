@@ -15,4 +15,8 @@ Uses the real wireline codec and packet decoder with minimal host-only Arduino/U
 
 The Sec+ 1.0 suite exercises the production receiver and scheduler: parity, release echoes, confirmation, independent expiry, 11,492 interval/latency combinations, timer wraparound, bounded waits, no replay, two release bytes, partial-write cleanup, UART pump, lifecycle teardown and overdue release under backlog. Electrical timing still needs hardware verification.
 
+It also replays the observed blocked-beam light/lock variant (0x5d → 0x1d →
+0x5d), checking both accepted prefixes across light/lock combinations, bad parity,
+confirmation, expiry and rejection of other prefixes.
+
 The Sec+ 2.0 recovery suite also injects a corrupt queued release after a transmitted press: controls must remain faulted, the invalid release must not transmit, and GET_STATUS queries must continue without replaying an action.

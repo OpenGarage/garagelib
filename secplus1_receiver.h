@@ -128,7 +128,11 @@ class Receiver {
       if (value==3 || value==7) { ++invalid_frames; gap.reset(); door.valid=false; door.count=0; return; }
       door.observe(value==6 ? 0 : value,now); observed=true;
     } else if (command==0x3a) {
-      if ((byte & 0xf0)!=0x50) { ++invalid_frames; gap.reset(); light_lock.valid=false; light_lock.count=0; return; }
+      // Garage capture: a blocked beam changes 0x5d to parity-valid 0x1d,
+      // while light/lock bits remain unchanged. Accept both observed prefixes;
+      // retain parity, confirmation and rejection of all other prefixes.
+      const uint8_t prefix=byte & 0xf0;
+      if (prefix!=0x50 && prefix!=0x10) { ++invalid_frames; gap.reset(); light_lock.valid=false; light_lock.count=0; return; }
       light_lock.observe(byte & 12,now); observed=true;
     } else {
       obstruction=byte!=0; obstruction_valid=true; obstruction_ms=now;

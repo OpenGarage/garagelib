@@ -56,6 +56,40 @@ static void receiver_tests() {
   SecPlus1Rx::Receiver e; learn(e); e.feed(0x38,SecPlus1Rx::parity(0x38),1800); e.tick(1900);
   assert(!e.request && !e.gap.ready(1900));
 }
+static void blocked_beam_tests() {
+  SecPlus1Rx::Receiver r;
+  // Replay the captured clear / blocked / clear light-on sequence.
+  frame(r,0x38,0x52,100); frame(r,0x38,0x52,350);
+  frame(r,0x3a,0x5d,600); frame(r,0x3a,0x5d,850);
+  assert(r.light_lock.valid && r.light_lock.value==12);
+  frame(r,0x39,1,1100);
+  for(unsigned i=0;i<40;++i) frame(r,0x3a,0x1d,1350+i*250);
+  assert(r.light_lock.valid && r.light_lock.value==12);
+  assert(r.obstruction_valid && r.obstruction && r.door.valid);
+  frame(r,0x39,0,11350); frame(r,0x3a,0x5d,11600);
+  assert(r.light_lock.valid && r.light_lock.value==12 && !r.obstruction);
+  assert(r.invalid_frames==0 && r.parity_errors==0);
+  // Both prefixes preserve all light/lock combinations and require confirmation.
+  for(unsigned prefix:{0x10U,0x50U}) for(unsigned bits:{0U,4U,8U,12U}) {
+    SecPlus1Rx::Receiver e;
+    frame(e,0x3a,prefix|bits|1,100); assert(!e.light_lock.valid);
+    frame(e,0x3a,prefix|bits|1,350);
+    assert(e.light_lock.valid && e.light_lock.value==bits);
+    e.tick(15380); assert(!e.light_lock.valid);
+  }
+  // No general relaxation of framing or parity validation.
+  for(unsigned prefix:{0x00U,0x20U,0x30U,0x40U,0x60U,0x70U,0x80U,0x90U,0xa0U,0xb0U,0xc0U,0xd0U,0xe0U,0xf0U}) {
+    SecPlus1Rx::Receiver e;
+    frame(e,0x3a,prefix|0xd,100); frame(e,0x3a,prefix|0xd,350);
+    assert(!e.light_lock.valid && e.invalid_frames==2);
+  }
+  SecPlus1Rx::Receiver e;
+  frame(e,0x3a,0x1d,100);
+  e.feed(0x3a,SecPlus1Rx::parity(0x3a),350);
+  e.feed(0x1d,!SecPlus1Rx::parity(0x1d),380);
+  frame(e,0x3a,0x1d,600); assert(!e.light_lock.valid && e.parity_errors==1);
+  frame(e,0x3a,0x1d,850); assert(e.light_lock.valid);
+}
 static void gap_tests() {
   for (uint32_t latency=0;latency<9;++latency) {
     SecPlus1Rx::Receiver r; learn(r,1000,250,latency);
@@ -163,6 +197,6 @@ static void panel_emulation_setting_tests() {
   SecPlusCommon::delete_sw_serial();
 }
 int main() {
-  receiver_tests(); gap_tests(); transaction_tests(); panel_emulation_setting_tests();
+  receiver_tests(); blocked_beam_tests(); gap_tests(); transaction_tests(); panel_emulation_setting_tests();
   std::puts("Sec+ 1.0: receiver, 11492 timing combinations, wraparound and transaction tests passed");
 }

@@ -28,8 +28,8 @@ class Session {
   }
   Query due(uint32_t now) const {
     if (phase==Phase::SEEKING) {
-      if (!attempts) return Query::STATUS;
-      if (attempts==1 && uint32_t(now-last_attempt)>=PAIR_SPACING) return Query::OPENINGS;
+      if (!attempts) return Query::OPENINGS;
+      if (attempts==1 && uint32_t(now-last_attempt)>=PAIR_SPACING) return Query::STATUS;
     } else if (phase==Phase::OBSERVED && uint32_t(now-last_attempt)>=POLL_INTERVAL) return Query::STATUS;
     return Query::NONE;
   }

@@ -20,3 +20,5 @@ It also replays the observed blocked-beam light/lock variant (0x5d → 0x1d →
 confirmation, expiry and rejection of other prefixes.
 
 The Sec+ 2.0 recovery suite also injects a corrupt queued release after a transmitted press: controls must remain faulted, the invalid release must not transmit, and GET_STATUS queries must continue without replaying an action.
+
+The startup-query tests decode the transmitted OPENINGS/STATUS pair and verify adjacent rolling codes, a single post-sync openings refresh, opening-count decoding, control/release priority, and another single refresh after stale-link recovery.

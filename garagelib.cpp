@@ -291,7 +291,12 @@ namespace SecPlus2 {
 				const uint32_t now=millis();
 				const auto previous_phase=recovery.phase;
 				recovery.tick(now);
-				if (recovery.phase!=previous_phase) query_cached=false;
+				if (recovery.phase!=previous_phase) {
+					query_cached=false;
+					// The seek's first query may be ignored while the opener resyncs our
+					// rolling code; refresh openings after synchronized status observation.
+					if (recovery.phase==SecPlus2Recovery::Session::Phase::OBSERVED) ask_for_openings=true;
+				}
 				if (!recovery.fresh(now) && state.door_state!=SecPlusCommon::DoorStatus::UNKNOWN) {
 					state.door_state=SecPlusCommon::DoorStatus::UNKNOWN; update_callback();
 				}

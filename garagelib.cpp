@@ -209,7 +209,7 @@ namespace SecPlus2 {
 				SecPlusCommon::sw_serial = new SoftwareSerial();
 				// Start Serial with 8 bits no parity 1 stop bit and inverted
 				SecPlusCommon::sw_serial->begin(9600, SWSERIAL_8N1, rx_pin, tx_pin, true);
-				SecPlusCommon::sw_serial->enableIntTx(false);
+				SecPlusCommon::sw_serial->enableIntTx(true);
 			}
 
 			void enable_callback(state_callback_t callback) {

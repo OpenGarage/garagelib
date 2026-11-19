@@ -691,6 +691,8 @@ namespace SecPlus1 {
 			int8_t toggle_lock() { return request_action(0x34,0x35); }
 			int8_t toggle_light() { return request_action(0x32,0x33); }
 			int8_t toggle_door() { return request_action(0x30,0x31); }
+			// True from a queued press until its last release byte has been sent.
+			bool command_pending() const { return pending_press || releases_left; }
 			void set_panel_emulation_disabled(bool disabled) { panel_emulation_disabled = disabled; }
 
 			void loop() {

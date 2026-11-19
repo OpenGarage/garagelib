@@ -7,9 +7,24 @@ namespace SecPlus1Rx {
 class Gap {
  public:
   // 1200 baud / 8E1 is about 9.17 ms per byte. Dequeue timestamps in
-  // milliseconds can measure a valid adjacent query/reply as 9 or 10 ms.
-  // This learning floor is separate from the unchanged 10 ms post-reply guard.
+  // milliseconds measure a valid adjacent query/reply as about 9 ms
+  // (diagnostics count shorter readings against this nominal spacing).
   static constexpr uint32_t MIN_REPLY_MS = 9;
+  // A reply read at least this long after its query was not decoded in the
+  // same UART pump pass, so the query was read before the reply finished
+  // arriving and its timestamp is late by less than one byte time: the same
+  // bound as a 9 ms reading. Shorter readings mean the pair was buffered and
+  // decoded together, with both timestamps late by an unknown amount.
+  static constexpr uint32_t MIN_CLEAN_MS = 6;
+  // The opener answers within about one byte time. A longer reading means the
+  // reply was read late (a stalled loop between the two reads), not that the
+  // query timestamp was wrong: the query was read before its reply existed.
+  static constexpr uint32_t MAX_CLEAN_MS = 60;
+  // Buffered cycles allowed before a clean exchange must re-anchor the
+  // cadence, and how late a buffered query may be read past the learned
+  // cadence and still be attributed to the expected poll.
+  static constexpr uint8_t MAX_SKIPPED = 4;
+  static constexpr uint32_t MAX_LATE_MS = 150;
 #ifdef OG_SEC1_DIAGNOSTICS
   struct Diagnostic {
     uint32_t exchanges=0, resets=0, bad_latency=0, zero_latency=0, bad_interval=0;
@@ -26,7 +41,7 @@ class Gap {
 #ifdef OG_SEC1_DIAGNOSTICS
     ++diagnostic.resets;
 #endif
-    seen = false; count = 0;
+    seen = false; count = 0; skipped = 0;
   }
   void exchange(uint32_t q, uint32_t r) {
 #ifdef OG_SEC1_DIAGNOSTICS
@@ -40,9 +55,31 @@ class Gap {
     }
     diagnostic.previous_query=q; diagnostic.have_query=true;
 #endif
-    if (uint32_t(r-q) < MIN_REPLY_MS || uint32_t(r-q) > 60) { reset(); return; }
+    const uint32_t latency = r-q;
+    if (latency < MIN_CLEAN_MS || latency > MAX_CLEAN_MS) {
+      // A buffered cycle (query and reply decoded together) or a reply read
+      // late after a loop delay can neither teach the predictor nor authorize
+      // a send. Reads are never early, so its query still fits the learned
+      // cadence: keep the clean reference and drop training only for a query
+      // earlier than the cadence allows (a faster panel, or two cycles decoded
+      // in one pass), one too late to attribute, or too many such cycles in a
+      // row. A reply with no query for 100 ms is still dropped by the receiver.
+      if (seen) {
+        const uint32_t cycles=uint32_t(skipped)+1, elapsed=q-query;
+        if (cycles>MAX_SKIPPED || (count && (elapsed+20<cycles*minimum ||
+            elapsed>cycles*maximum+MAX_LATE_MS))) reset();
+        else ++skipped;
+      }
+      return;
+    }
     if (seen) {
-      const uint32_t interval = q-query;
+      uint32_t interval = q-query;
+      if (skipped) {
+        // Remove the skipped periods so the usual absolute tolerance applies
+        // to this exchange alone. With no learned interval, restart here.
+        const uint32_t span=count ? uint32_t(skipped)*((minimum+maximum)/2) : interval;
+        interval = interval>span ? interval-span : 0;
+      }
       if (interval < 180 || interval > 400 ||
           (count && (interval+20 < minimum || interval > maximum+20))) count=0;
       if (interval >= 180 && interval <= 400) {
@@ -52,22 +89,22 @@ class Gap {
         if (count < 3) ++count;
       }
     }
-    seen=true; query=q; reply=r;
+    seen=true; query=q; reply=r; skipped=0;
 #ifdef OG_SEC1_DIAGNOSTICS
     diagnostic.max_count=std::max(diagnostic.max_count,count);
 #endif
   }
   bool ready(uint32_t now) const {
     const uint32_t age=now-query, reply_age=now-reply;
-    return seen && count>=3 && reply_age>=10 && reply_age<=45 &&
+    return seen && !skipped && count>=3 && reply_age>=10 && reply_age<=45 &&
         age<minimum && minimum-age>=160;
   }
   bool insufficient(uint32_t now) const {
-    return seen && count>=3 && uint32_t(now-reply)<=400 && minimum<170U+uint32_t(reply-query);
+    return seen && !skipped && count>=3 && uint32_t(now-reply)<=400 && minimum<170U+uint32_t(reply-query);
   }
  private:
   uint32_t query=0, reply=0, minimum=0, maximum=0;
-  uint8_t count=0;
+  uint8_t count=0, skipped=0;
   bool seen=false;
 };
 inline bool parity(uint8_t value) {

@@ -91,9 +91,11 @@ static void blocked_beam_tests() {
   frame(e,0x3a,0x1d,850); assert(e.light_lock.valid);
 }
 static void gap_tests() {
+  // Below MIN_CLEAN_MS the pair was decoded together and never teaches or sends;
+  // 6-8 ms is millisecond rounding of adjacent bytes and is a usable reference.
   for (uint32_t latency=0;latency<9;++latency) {
     SecPlus1Rx::Receiver r; learn(r,1000,250,latency);
-    assert(!r.gap.ready(1800));
+    assert(r.gap.ready(1800)==(latency>=SecPlus1Rx::Gap::MIN_CLEAN_MS));
   }
   // Mixed 9/10 ms observations must retain the same 250 ms panel cadence.
   SecPlus1Rx::Receiver mixed;
@@ -107,7 +109,7 @@ static void gap_tests() {
   mixed.gap.exchange(2000,2061); // upper bound remains unchanged
   assert(!mixed.gap.ready(2071));
   for (uint32_t interval=180;interval<=400;++interval) {
-    for (uint32_t latency=9;latency<=60;++latency) {
+    for (uint32_t latency=SecPlus1Rx::Gap::MIN_CLEAN_MS;latency<=60;++latency) {
       SecPlus1Rx::Receiver r; learn(r,1000,interval,latency);
       const uint32_t reply=1000+3*interval+latency;
       assert(r.gap.insufficient(reply)==(interval<170+latency));
@@ -126,12 +128,13 @@ static void transaction_tests() {
   test_now=1000; g.begin();
   auto *uart=SecPlusCommon::sw_serial;
   learn(g.receiver); test_now=1780;
-  assert(g.toggle_light()==0); g.loop(); assert(uart->tx.empty());
-  test_now=1790; g.loop(); assert(uart->tx==std::vector<uint8_t>{0x32});
+  assert(!g.command_pending());
+  assert(g.toggle_light()==0); g.loop(); assert(uart->tx.empty() && g.command_pending());
+  test_now=1790; g.loop(); assert(uart->tx==std::vector<uint8_t>{0x32} && g.command_pending());
   assert(g.toggle_door()<0); // no overlap
   test_now=1829; g.loop(); assert(uart->tx.size()==1);
   test_now=1830; g.loop(); assert(uart->tx==std::vector<uint8_t>({0x32,0x33}));
-  test_now=1870; g.loop(); assert(uart->tx==std::vector<uint8_t>({0x32,0x33,0x33}));
+  test_now=1870; g.loop(); assert(uart->tx==std::vector<uint8_t>({0x32,0x33,0x33}) && !g.command_pending());
   // Consumed prediction cannot dispatch another press without new exchanges.
   assert(!g.receiver.gap.ready(1870));
   assert(g.toggle_door()==0); test_now=3870; g.loop();
@@ -198,5 +201,5 @@ static void panel_emulation_setting_tests() {
 }
 int main() {
   receiver_tests(); blocked_beam_tests(); gap_tests(); transaction_tests(); panel_emulation_setting_tests();
-  std::puts("Sec+ 1.0: receiver, 11492 timing combinations, wraparound and transaction tests passed");
+  std::puts("Sec+ 1.0: receiver, 12155 timing combinations, wraparound and transaction tests passed");
 }
